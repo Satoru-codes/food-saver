@@ -385,6 +385,108 @@ begin
 end;
 $$;
 
+-- Change another household member's role and granular permissions.
+-- Owners can manage Admins and Members. An Admin must have can_manage_members
+-- and can manage only Members; only the Owner can change an existing Admin.
+-- The Owner role itself cannot be reassigned by this function.
+create or replace function public.update_household_member_permissions(
+  p_member_id uuid,
+  p_role text default null,
+  p_can_manage_inventory boolean default null,
+  p_can_log_own_consumption boolean default null,
+  p_can_log_others_consumption boolean default null,
+  p_can_record_waste boolean default null,
+  p_can_view_household_analytics boolean default null,
+  p_can_manage_members boolean default null
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $
+declare
+  v_actor uuid := auth.uid();
+  v_target public.household_members%rowtype;
+  v_owner_user_id uuid;
+  v_new_role text;
+  v_is_owner boolean;
+begin
+  if v_actor is null then
+    raise exception 'You must be signed in.';
+  end if;
+
+  select hm.*, h.owner_user_id
+    into v_target, v_owner_user_id
+  from public.household_members hm
+  join public.households h on h.id = hm.household_id
+  where hm.id = p_member_id
+  for update of hm;
+
+  if not found then
+    raise exception 'Household member was not found.';
+  end if;
+
+  v_is_owner := v_owner_user_id = v_actor;
+
+  if not v_is_owner
+     and not public.has_household_permission(v_target.household_id, 'manage_members') then
+    raise exception 'You do not have permission to manage household members.';
+  end if;
+
+  if v_target.user_id = v_actor then
+    raise exception 'You cannot change your own household role or permissions.';
+  end if;
+
+  if v_target.role = 'owner' then
+    raise exception 'The household Owner cannot be changed here.';
+  end if;
+
+  if not v_is_owner and v_target.role = 'admin' then
+    raise exception 'Only the household Owner can change an existing Admin.';
+  end if;
+
+  if p_role is not null and p_role not in ('admin', 'member') then
+    raise exception 'Role must be admin or member. Ownership transfer is separate.';
+  end if;
+
+  v_new_role := coalesce(p_role, v_target.role);
+
+  update public.household_members
+  set role = v_new_role,
+      can_manage_inventory = coalesce(
+        p_can_manage_inventory,
+        case when v_new_role <> v_target.role then v_new_role = 'admin'
+             else v_target.can_manage_inventory end
+      ),
+      can_log_own_consumption = coalesce(
+        p_can_log_own_consumption,
+        case when v_new_role <> v_target.role then v_new_role = 'admin'
+             else v_target.can_log_own_consumption end
+      ),
+      can_log_others_consumption = coalesce(
+        p_can_log_others_consumption,
+        case when v_new_role <> v_target.role then v_new_role = 'admin'
+             else v_target.can_log_others_consumption end
+      ),
+      can_record_waste = coalesce(
+        p_can_record_waste,
+        case when v_new_role <> v_target.role then v_new_role = 'admin'
+             else v_target.can_record_waste end
+      ),
+      can_view_household_analytics = coalesce(
+        p_can_view_household_analytics,
+        case when v_new_role <> v_target.role then v_new_role = 'admin'
+             else v_target.can_view_household_analytics end
+      ),
+      can_manage_members = coalesce(
+        p_can_manage_members,
+        case when v_new_role <> v_target.role then v_new_role = 'admin'
+             else v_target.can_manage_members end
+      )
+  where id = p_member_id;
+end;
+$;
+
 -- Record consumption and update stock in one database transaction.
 create or replace function public.record_consumption(
   p_pantry_item_id uuid,
@@ -649,10 +751,8 @@ create policy "Household members can view the member list"
 on public.household_members for select to authenticated
 using (public.is_household_member(household_id));
 
-create policy "Owner can update member roles and permissions"
-on public.household_members for update to authenticated
-using (public.is_household_owner(household_id))
-with check (public.is_household_owner(household_id));
+-- Membership roles and permissions are changed only through the controlled RPC below.
+-- There is deliberately no direct UPDATE policy or table grant for clients.
 
 create policy "Authenticated users can view food categories"
 on public.food_categories for select to authenticated
@@ -711,13 +811,7 @@ grant select, update (display_name, preferred_language)
 grant select, update (name)
   on public.households to authenticated;
 
-grant select,
-      update (
-        role, can_manage_inventory, can_log_own_consumption,
-        can_log_others_consumption, can_record_waste,
-        can_view_household_analytics, can_manage_members
-      )
-  on public.household_members to authenticated;
+grant select on public.household_members to authenticated;
 
 grant select on public.food_categories to authenticated;
 
@@ -743,6 +837,7 @@ revoke all on function public.is_household_member(uuid) from public;
 revoke all on function public.is_household_owner(uuid) from public;
 revoke all on function public.has_household_permission(uuid, text) from public;
 revoke all on function public.create_household(text) from public;
+revoke all on function public.update_household_member_permissions(uuid, text, boolean, boolean, boolean, boolean, boolean, boolean) from public;
 revoke all on function public.record_consumption(uuid, numeric, uuid) from public;
 revoke all on function public.record_food_waste(uuid, numeric, text) from public;
 revoke all on function public.reverse_inventory_movement(uuid) from public;
@@ -751,6 +846,7 @@ grant execute on function public.is_household_member(uuid) to authenticated;
 grant execute on function public.is_household_owner(uuid) to authenticated;
 grant execute on function public.has_household_permission(uuid, text) to authenticated;
 grant execute on function public.create_household(text) to authenticated;
+grant execute on function public.update_household_member_permissions(uuid, text, boolean, boolean, boolean, boolean, boolean, boolean) to authenticated;
 grant execute on function public.record_consumption(uuid, numeric, uuid) to authenticated;
 grant execute on function public.record_food_waste(uuid, numeric, text) to authenticated;
 grant execute on function public.reverse_inventory_movement(uuid) to authenticated;
