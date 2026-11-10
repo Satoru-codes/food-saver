@@ -263,8 +263,8 @@ begin
   values (
     new.id,
     coalesce(
-      nullif(pg_catalog.trim(new.raw_user_meta_data ->> 'full_name'), ''),
-      nullif(pg_catalog.trim(new.raw_user_meta_data ->> 'name'), ''),
+      nullif(pg_catalog.btrim(new.raw_user_meta_data ->> 'full_name'), ''),
+      nullif(pg_catalog.btrim(new.raw_user_meta_data ->> 'name'), ''),
       pg_catalog.split_part(coalesce(new.email, ''), '@', 1)
     ),
     case
@@ -392,12 +392,12 @@ begin
     raise exception 'You must be signed in to create a household.';
   end if;
 
-  if p_name is null or pg_catalog.length(pg_catalog.trim(p_name)) not between 1 and 80 then
+  if p_name is null or pg_catalog.length(pg_catalog.btrim(p_name)) not between 1 and 80 then
     raise exception 'Household name must be between 1 and 80 characters.';
   end if;
 
   insert into public.households (name, owner_user_id)
-  values (pg_catalog.trim(p_name), v_user_id)
+  values (pg_catalog.btrim(p_name), v_user_id)
   returning id into v_household_id;
 
   insert into public.household_members (
@@ -528,7 +528,7 @@ as $fn$
 declare
   v_actor uuid := auth.uid();
   v_invitation_id uuid;
-  v_email text := pg_catalog.lower(pg_catalog.trim(coalesce(p_email, '')));
+  v_email text := pg_catalog.lower(pg_catalog.btrim(coalesce(p_email, '')));
 begin
   if v_actor is null then
     raise exception 'You must be signed in.';
