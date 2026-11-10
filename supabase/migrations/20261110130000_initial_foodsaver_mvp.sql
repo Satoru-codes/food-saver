@@ -237,6 +237,21 @@ create trigger pantry_items_set_updated_at
   before update on public.pantry_items
   for each row execute function private.set_updated_at();
 
+create or replace function private.stamp_pantry_item_editor()
+returns trigger
+language plpgsql
+set search_path = ''
+as $fn$
+begin
+  new.updated_by := auth.uid();
+  return new;
+end;
+$fn$;
+
+create trigger pantry_items_stamp_editor
+  before update on public.pantry_items
+  for each row execute function private.stamp_pantry_item_editor();
+
 create or replace function private.handle_new_user()
 returns trigger
 language plpgsql
@@ -890,6 +905,9 @@ begin
   if v_movement.movement_type = 'reversal' then
     raise exception 'A reversal cannot itself be reversed.';
   end if;
+  if not private.is_household_member(v_movement.household_id) then
+    raise exception 'You are no longer a member of this household.';
+  end if;
   if v_actor <> v_movement.actor_user_id
      and not private.has_household_permission(v_movement.household_id, 'manage_inventory') then
     raise exception 'You can only undo your own entry unless you can manage inventory.';
@@ -1173,7 +1191,7 @@ grant select,
       ),
       update (
         name, category_key, storage_location_id, display_unit,
-        expiry_date, alert_days_before, notes, updated_by, archived_at
+        expiry_date, alert_days_before, notes, archived_at
       )
   on public.pantry_items to authenticated;
 
@@ -1213,6 +1231,7 @@ grant execute on function private.reverse_inventory_movement_impl(uuid) to authe
 revoke all on function private.set_updated_at() from public, anon, authenticated;
 revoke all on function private.handle_new_user() from public, anon, authenticated;
 revoke all on function private.log_initial_pantry_stock() from public, anon, authenticated;
+revoke all on function private.stamp_pantry_item_editor() from public, anon, authenticated;
 
 -- Public RPCs are intentionally available only to authenticated clients.
 revoke all on function public.create_household(text) from public, anon, authenticated;
