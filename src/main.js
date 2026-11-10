@@ -137,6 +137,13 @@ function showStatus(message, type = "info") {
   node.hidden = false;
 }
 
+function showHouseholdStatus(message, type = "info") {
+  const node = $("#household-status-message");
+  node.textContent = message;
+  node.className = `status-message ${type}`;
+  node.hidden = false;
+}
+
 function clearStatus() {
   const node = $("#status-message");
   node.textContent = "";
@@ -384,7 +391,7 @@ $("#household-form").addEventListener("submit", async (event) => {
     if (error) throw error;
     await loadHouseholds();
   } catch (error) {
-    showStatus(friendlyError(error), "error");
+    showHouseholdStatus(friendlyError(error), "error");
   } finally {
     isSubmitting = false;
     setBusy(form, false);
