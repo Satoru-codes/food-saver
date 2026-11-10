@@ -1,10 +1,28 @@
--- FoodSaver MVP: initial household, pantry, permissions, and inventory ledger.
--- Apply this migration to the FoodSaver-dev Supabase project only.
--- Keep credentials and API keys out of this file.
+-- FoodSaver MVP: household, pantry, permissions, invitations, and inventory ledger.
+-- Target: the FoodSaver-dev Supabase project only.
+-- Internal SECURITY DEFINER routines live in the unexposed private schema.
+-- Never place database passwords or Supabase secret/service-role keys in this file.
 
 begin;
 
-create extension if not exists pgcrypto;
+create extension if not exists pgcrypto with schema extensions;
+
+-- ---------------------------------------------------------------------------
+-- Private schema and least-privilege defaults
+-- ---------------------------------------------------------------------------
+
+create schema if not exists private;
+revoke all on schema private from public, anon, authenticated;
+grant usage on schema private to authenticated;
+
+-- Current Supabase projects may have different Data API default-grant settings.
+-- Make this schema's future public objects opt-in rather than automatically exposed.
+alter default privileges for role postgres in schema public
+  revoke all on tables from anon, authenticated, service_role;
+alter default privileges for role postgres in schema public
+  revoke execute on functions from public, anon, authenticated, service_role;
+alter default privileges for role postgres in schema public
+  revoke usage, select on sequences from anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
 -- Profiles and household membership
@@ -44,43 +62,33 @@ create table public.household_members (
   unique (id, household_id)
 );
 
+create unique index household_members_one_owner_idx
+  on public.household_members(household_id)
+  where role = 'owner';
+
 create index household_members_user_idx
   on public.household_members(user_id, household_id);
 
--- Keep profile records in sync with Supabase Auth sign-ups.
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  insert into public.profiles (id, display_name, preferred_language)
-  values (
-    new.id,
-    coalesce(
-      nullif(trim(new.raw_user_meta_data ->> 'full_name'), ''),
-      nullif(trim(new.raw_user_meta_data ->> 'name'), ''),
-      split_part(coalesce(new.email, ''), '@', 1)
-    ),
-    case
-      when new.raw_user_meta_data ->> 'preferred_language' = 'hi' then 'hi'
-      else 'en'
-    end
-  )
-  on conflict (id) do nothing;
+-- Invitations store only a SHA-256 token hash, never the raw invitation token.
+create table public.household_invitations (
+  id uuid primary key default gen_random_uuid(),
+  household_id uuid not null references public.households(id) on delete cascade,
+  email text not null check (email = lower(trim(email))),
+  token_hash text not null unique
+    check (token_hash ~ '^[0-9a-f]{64}$'),
+  invited_by uuid not null references auth.users(id),
+  expires_at timestamptz not null default (now() + interval '7 days'),
+  accepted_at timestamptz,
+  accepted_by uuid references auth.users(id),
+  revoked_at timestamptz,
+  created_at timestamptz not null default now()
+);
 
-  return new;
-end;
-$$;
-
-drop trigger if exists on_auth_user_created_foodsaver on auth.users;
-create trigger on_auth_user_created_foodsaver
-  after insert on auth.users
-  for each row execute function public.handle_new_user();
+create index household_invitations_household_idx
+  on public.household_invitations(household_id, created_at desc);
 
 -- ---------------------------------------------------------------------------
--- Pantry taxonomy and storage
+-- Food categories, storage locations, and pantry
 -- ---------------------------------------------------------------------------
 
 create table public.food_categories (
@@ -159,9 +167,8 @@ create index pantry_items_category_idx
   where archived_at is null;
 
 -- ---------------------------------------------------------------------------
--- Immutable inventory history
+-- Append-only inventory ledger
 -- quantity_delta is expressed in the pantry item's base unit.
--- Addition/adjustment are positive or negative; consumption/waste are negative.
 -- ---------------------------------------------------------------------------
 
 create table public.inventory_movements (
@@ -179,13 +186,14 @@ create table public.inventory_movements (
   reversal_of_id uuid unique references public.inventory_movements(id),
   created_at timestamptz not null default now(),
   foreign key (pantry_item_id, household_id)
-    references public.pantry_items(id, household_id) on delete cascade,
+    references public.pantry_items(id, household_id) on delete restrict,
   check (
-    (movement_type = 'consumption') or consumed_by_user_id is null
+    (movement_type = 'addition' and quantity_delta > 0) or
+    (movement_type in ('consumption', 'waste') and quantity_delta < 0) or
+    movement_type in ('adjustment', 'reversal')
   ),
-  check (
-    (movement_type = 'waste') or reason is null
-  ),
+  check (movement_type = 'consumption' or consumed_by_user_id is null),
+  check (movement_type = 'waste' or reason is null),
   check (
     (movement_type = 'reversal' and reversal_of_id is not null) or
     (movement_type <> 'reversal' and reversal_of_id is null)
@@ -199,125 +207,127 @@ create index inventory_movements_item_time_idx
   on public.inventory_movements(pantry_item_id, created_at desc);
 
 -- ---------------------------------------------------------------------------
--- Updated timestamps and safe inventory movement logging
+-- Internal timestamp and profile triggers
 -- ---------------------------------------------------------------------------
 
-create or replace function public.set_updated_at()
+create or replace function private.set_updated_at()
 returns trigger
 language plpgsql
-set search_path = public
-as $$
+set search_path = ''
+as $fn$
 begin
-  new.updated_at = now();
+  new.updated_at := pg_catalog.now();
   return new;
 end;
-$$;
+$fn$;
 
 create trigger profiles_set_updated_at
   before update on public.profiles
-  for each row execute function public.set_updated_at();
+  for each row execute function private.set_updated_at();
 
 create trigger households_set_updated_at
   before update on public.households
-  for each row execute function public.set_updated_at();
+  for each row execute function private.set_updated_at();
 
 create trigger storage_locations_set_updated_at
   before update on public.storage_locations
-  for each row execute function public.set_updated_at();
+  for each row execute function private.set_updated_at();
 
 create trigger pantry_items_set_updated_at
   before update on public.pantry_items
-  for each row execute function public.set_updated_at();
+  for each row execute function private.set_updated_at();
 
-create or replace function public.log_pantry_item_stock_change()
+create or replace function private.handle_new_user()
 returns trigger
 language plpgsql
 security definer
-set search_path = public
-as $$
-declare
-  v_actor uuid;
-  v_delta numeric(14,3);
+set search_path = ''
+as $fn$
 begin
-  if current_setting('foodsaver.skip_movement_log', true) = 'true' then
-    return new;
-  end if;
+  insert into public.profiles (id, display_name, preferred_language)
+  values (
+    new.id,
+    coalesce(
+      nullif(pg_catalog.trim(new.raw_user_meta_data ->> 'full_name'), ''),
+      nullif(pg_catalog.trim(new.raw_user_meta_data ->> 'name'), ''),
+      pg_catalog.split_part(coalesce(new.email, ''), '@', 1)
+    ),
+    case
+      when new.raw_user_meta_data ->> 'preferred_language' = 'hi' then 'hi'
+      else 'en'
+    end
+  )
+  on conflict (id) do nothing;
 
-  if tg_op = 'INSERT' then
-    if new.quantity_base > 0 then
-      insert into public.inventory_movements (
-        household_id, pantry_item_id, movement_type, quantity_delta,
-        base_unit, actor_user_id
-      )
-      values (
-        new.household_id, new.id, 'addition', new.quantity_base,
-        new.base_unit, coalesce(new.created_by, auth.uid())
-      );
-    end if;
-    return new;
-  end if;
+  return new;
+end;
+$fn$;
 
-  v_delta := new.quantity_base - old.quantity_base;
-  if v_delta <> 0 then
-    v_actor := coalesce(auth.uid(), new.updated_by, new.created_by);
+create trigger on_auth_user_created_foodsaver
+  after insert on auth.users
+  for each row execute function private.handle_new_user();
+
+-- The initial pantry quantity is recorded as an addition.
+create or replace function private.log_initial_pantry_stock()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $fn$
+begin
+  if new.quantity_base > 0 then
     insert into public.inventory_movements (
       household_id, pantry_item_id, movement_type, quantity_delta,
       base_unit, actor_user_id
     )
     values (
-      new.household_id, new.id, 'adjustment', v_delta,
-      new.base_unit, v_actor
+      new.household_id, new.id, 'addition', new.quantity_base,
+      new.base_unit, coalesce(new.created_by, auth.uid())
     );
   end if;
-
   return new;
 end;
-$$;
+$fn$;
 
-create trigger pantry_items_log_stock_insert
+create trigger pantry_items_log_initial_stock
   after insert on public.pantry_items
-  for each row execute function public.log_pantry_item_stock_change();
-
-create trigger pantry_items_log_stock_update
-  after update of quantity_base on public.pantry_items
-  for each row execute function public.log_pantry_item_stock_change();
+  for each row execute function private.log_initial_pantry_stock();
 
 -- ---------------------------------------------------------------------------
--- Authorization helpers. SECURITY DEFINER avoids recursive RLS lookups.
--- Owner is unrestricted. Admins and Members receive explicit permissions.
+-- Internal authorization helpers used by RLS and controlled RPC routines
 -- ---------------------------------------------------------------------------
 
-create or replace function public.is_household_member(p_household_id uuid)
+create or replace function private.is_household_member(p_household_id uuid)
 returns boolean
 language sql
 stable
 security definer
-set search_path = public
-as $$
+set search_path = ''
+as $fn$
   select exists (
     select 1
     from public.household_members hm
     where hm.household_id = p_household_id
       and hm.user_id = auth.uid()
   );
-$$;
+$fn$;
 
-create or replace function public.is_household_owner(p_household_id uuid)
+create or replace function private.is_household_owner(p_household_id uuid)
 returns boolean
 language sql
 stable
 security definer
-set search_path = public
-as $$
+set search_path = ''
+as $fn$
   select exists (
     select 1
     from public.households h
     where h.id = p_household_id
       and h.owner_user_id = auth.uid()
   );
-$$;
+$fn$;
 
-create or replace function public.has_household_permission(
+create or replace function private.has_household_permission(
   p_household_id uuid,
   p_permission text
 )
@@ -325,35 +335,40 @@ returns boolean
 language sql
 stable
 security definer
-set search_path = public
-as $$
-  select exists (
-    select 1
-    from public.household_members hm
-    where hm.household_id = p_household_id
-      and hm.user_id = auth.uid()
-      and (
-        hm.role = 'owner'
-        or case p_permission
-          when 'manage_inventory' then hm.can_manage_inventory
-          when 'log_own_consumption' then hm.can_log_own_consumption
-          when 'log_others_consumption' then hm.can_log_others_consumption
-          when 'record_waste' then hm.can_record_waste
-          when 'view_household_analytics' then hm.can_view_household_analytics
-          when 'manage_members' then hm.can_manage_members
-          else false
-        end
-      )
-  );
-$$;
+set search_path = ''
+as $fn$
+  select
+    private.is_household_owner(p_household_id)
+    or exists (
+      select 1
+      from public.household_members hm
+      where hm.household_id = p_household_id
+        and hm.user_id = auth.uid()
+        and (
+          hm.role = 'owner'
+          or case p_permission
+            when 'manage_inventory' then hm.can_manage_inventory
+            when 'log_own_consumption' then hm.can_log_own_consumption
+            when 'log_others_consumption' then hm.can_log_others_consumption
+            when 'record_waste' then hm.can_record_waste
+            when 'view_household_analytics' then hm.can_view_household_analytics
+            when 'manage_members' then hm.can_manage_members
+            else false
+          end
+        )
+    );
+$fn$;
 
--- A newly created household automatically has one Owner.
-create or replace function public.create_household(p_name text)
+-- ---------------------------------------------------------------------------
+-- Internal household creation and member administration
+-- ---------------------------------------------------------------------------
+
+create or replace function private.create_household_impl(p_name text)
 returns uuid
 language plpgsql
 security definer
-set search_path = public
-as $$
+set search_path = ''
+as $fn$
 declare
   v_user_id uuid := auth.uid();
   v_household_id uuid;
@@ -362,12 +377,12 @@ begin
     raise exception 'You must be signed in to create a household.';
   end if;
 
-  if p_name is null or length(trim(p_name)) not between 1 and 80 then
+  if p_name is null or pg_catalog.length(pg_catalog.trim(p_name)) not between 1 and 80 then
     raise exception 'Household name must be between 1 and 80 characters.';
   end if;
 
   insert into public.households (name, owner_user_id)
-  values (trim(p_name), v_user_id)
+  values (pg_catalog.trim(p_name), v_user_id)
   returning id into v_household_id;
 
   insert into public.household_members (
@@ -383,13 +398,9 @@ begin
 
   return v_household_id;
 end;
-$$;
+$fn$;
 
--- Change another household member's role and granular permissions.
--- Owners can manage Admins and Members. An Admin must have can_manage_members
--- and can manage only Members; only the Owner can change an existing Admin.
--- The Owner role itself cannot be reassigned by this function.
-create or replace function public.update_household_member_permissions(
+create or replace function private.update_household_member_permissions_impl(
   p_member_id uuid,
   p_role text default null,
   p_can_manage_inventory boolean default null,
@@ -402,8 +413,8 @@ create or replace function public.update_household_member_permissions(
 returns void
 language plpgsql
 security definer
-set search_path = public
-as $
+set search_path = ''
+as $fn$
 declare
   v_actor uuid := auth.uid();
   v_target public.household_members%rowtype;
@@ -415,21 +426,23 @@ begin
     raise exception 'You must be signed in.';
   end if;
 
-  select hm, h.owner_user_id
-    into v_target, v_owner_user_id
+  select hm.* into v_target
   from public.household_members hm
-  join public.households h on h.id = hm.household_id
   where hm.id = p_member_id
-  for update of hm;
+  for update;
 
   if not found then
     raise exception 'Household member was not found.';
   end if;
 
+  select h.owner_user_id into v_owner_user_id
+  from public.households h
+  where h.id = v_target.household_id;
+
   v_is_owner := v_owner_user_id = v_actor;
 
   if not v_is_owner
-     and not public.has_household_permission(v_target.household_id, 'manage_members') then
+     and not private.has_household_permission(v_target.household_id, 'manage_members') then
     raise exception 'You do not have permission to manage household members.';
   end if;
 
@@ -485,10 +498,234 @@ begin
       )
   where id = p_member_id;
 end;
-$;
+$fn$;
 
--- Record consumption and update stock in one database transaction.
-create or replace function public.record_consumption(
+create or replace function private.create_household_invitation_impl(
+  p_household_id uuid,
+  p_email text,
+  p_token_hash text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $fn$
+declare
+  v_actor uuid := auth.uid();
+  v_invitation_id uuid;
+  v_email text := pg_catalog.lower(pg_catalog.trim(coalesce(p_email, '')));
+begin
+  if v_actor is null then
+    raise exception 'You must be signed in.';
+  end if;
+  if not private.has_household_permission(p_household_id, 'manage_members') then
+    raise exception 'You do not have permission to invite household members.';
+  end if;
+  if v_email = '' or v_email !~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' then
+    raise exception 'Enter a valid email address.';
+  end if;
+  if p_token_hash is null or p_token_hash !~ '^[0-9a-f]{64}$' then
+    raise exception 'Invitation token hash must be a 64-character SHA-256 hex string.';
+  end if;
+  if exists (
+    select 1
+    from public.household_members hm
+    join auth.users u on u.id = hm.user_id
+    where hm.household_id = p_household_id
+      and pg_catalog.lower(u.email) = v_email
+  ) then
+    raise exception 'This person is already a member of the household.';
+  end if;
+
+  insert into public.household_invitations (
+    household_id, email, token_hash, invited_by
+  )
+  values (p_household_id, v_email, p_token_hash, v_actor)
+  returning id into v_invitation_id;
+
+  return v_invitation_id;
+end;
+$fn$;
+
+create or replace function private.accept_household_invitation_impl(p_token text)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $fn$
+declare
+  v_actor uuid := auth.uid();
+  v_email text;
+  v_token_hash text;
+  v_invitation public.household_invitations%rowtype;
+begin
+  if v_actor is null then
+    raise exception 'Sign in before accepting a household invitation.';
+  end if;
+  if p_token is null or pg_catalog.length(p_token) < 20 or pg_catalog.length(p_token) > 512 then
+    raise exception 'Invalid invitation token.';
+  end if;
+
+  select pg_catalog.lower(u.email) into v_email
+  from auth.users u
+  where u.id = v_actor;
+
+  if v_email is null then
+    raise exception 'Your account does not have an email address.';
+  end if;
+
+  v_token_hash := pg_catalog.encode(
+    extensions.digest(p_token, 'sha256'),
+    'hex'
+  );
+
+  select * into v_invitation
+  from public.household_invitations hi
+  where hi.token_hash = v_token_hash
+  for update;
+
+  if not found then
+    raise exception 'Invitation was not found or is invalid.';
+  end if;
+  if v_invitation.accepted_at is not null or v_invitation.revoked_at is not null then
+    raise exception 'This invitation has already been used or revoked.';
+  end if;
+  if v_invitation.expires_at <= pg_catalog.now() then
+    raise exception 'This invitation has expired.';
+  end if;
+  if v_invitation.email <> v_email then
+    raise exception 'Sign in with the email address to which this invitation was sent.';
+  end if;
+
+  insert into public.household_members (household_id, user_id, role)
+  values (v_invitation.household_id, v_actor, 'member');
+
+  update public.household_invitations
+  set accepted_at = pg_catalog.now(),
+      accepted_by = v_actor
+  where id = v_invitation.id;
+
+  return v_invitation.household_id;
+end;
+$fn$;
+
+-- ---------------------------------------------------------------------------
+-- Internal inventory operations. Each locks the item row and writes stock
+-- plus its ledger entry in one transaction. Clients cannot update stock
+-- quantities directly; use these routines instead.
+-- ---------------------------------------------------------------------------
+
+create or replace function private.add_inventory_stock_impl(
+  p_pantry_item_id uuid,
+  p_quantity_base numeric
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $fn$
+declare
+  v_actor uuid := auth.uid();
+  v_item public.pantry_items%rowtype;
+  v_movement_id uuid;
+begin
+  if v_actor is null then
+    raise exception 'You must be signed in.';
+  end if;
+  if p_quantity_base is null or p_quantity_base <= 0 then
+    raise exception 'Quantity to add must be greater than zero.';
+  end if;
+
+  select * into v_item
+  from public.pantry_items
+  where id = p_pantry_item_id and archived_at is null
+  for update;
+
+  if not found then
+    raise exception 'Pantry item was not found.';
+  end if;
+  if not private.has_household_permission(v_item.household_id, 'manage_inventory') then
+    raise exception 'You do not have permission to add inventory.';
+  end if;
+
+  update public.pantry_items
+  set quantity_base = quantity_base + p_quantity_base,
+      updated_by = v_actor
+  where id = p_pantry_item_id;
+
+  insert into public.inventory_movements (
+    household_id, pantry_item_id, movement_type, quantity_delta,
+    base_unit, actor_user_id
+  )
+  values (
+    v_item.household_id, v_item.id, 'addition', p_quantity_base,
+    v_item.base_unit, v_actor
+  )
+  returning id into v_movement_id;
+
+  return v_movement_id;
+end;
+$fn$;
+
+create or replace function private.adjust_inventory_stock_impl(
+  p_pantry_item_id uuid,
+  p_quantity_delta_base numeric
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $fn$
+declare
+  v_actor uuid := auth.uid();
+  v_item public.pantry_items%rowtype;
+  v_new_quantity numeric(14,3);
+  v_movement_id uuid;
+begin
+  if v_actor is null then
+    raise exception 'You must be signed in.';
+  end if;
+  if p_quantity_delta_base is null or p_quantity_delta_base = 0 then
+    raise exception 'Adjustment must be non-zero.';
+  end if;
+
+  select * into v_item
+  from public.pantry_items
+  where id = p_pantry_item_id and archived_at is null
+  for update;
+
+  if not found then
+    raise exception 'Pantry item was not found.';
+  end if;
+  if not private.has_household_permission(v_item.household_id, 'manage_inventory') then
+    raise exception 'You do not have permission to adjust inventory.';
+  end if;
+
+  v_new_quantity := v_item.quantity_base + p_quantity_delta_base;
+  if v_new_quantity < 0 then
+    raise exception 'Adjustment would make inventory negative.';
+  end if;
+
+  update public.pantry_items
+  set quantity_base = v_new_quantity,
+      updated_by = v_actor
+  where id = p_pantry_item_id;
+
+  insert into public.inventory_movements (
+    household_id, pantry_item_id, movement_type, quantity_delta,
+    base_unit, actor_user_id
+  )
+  values (
+    v_item.household_id, v_item.id, 'adjustment', p_quantity_delta_base,
+    v_item.base_unit, v_actor
+  )
+  returning id into v_movement_id;
+
+  return v_movement_id;
+end;
+$fn$;
+
+create or replace function private.record_consumption_impl(
   p_pantry_item_id uuid,
   p_quantity_base numeric,
   p_consumed_by_user_id uuid default null
@@ -496,8 +733,8 @@ create or replace function public.record_consumption(
 returns uuid
 language plpgsql
 security definer
-set search_path = public
-as $$
+set search_path = ''
+as $fn$
 declare
   v_actor uuid := auth.uid();
   v_item public.pantry_items%rowtype;
@@ -512,8 +749,7 @@ begin
 
   select * into v_item
   from public.pantry_items
-  where id = p_pantry_item_id
-    and archived_at is null
+  where id = p_pantry_item_id and archived_at is null
   for update;
 
   if not found then
@@ -521,8 +757,8 @@ begin
   end if;
 
   if p_consumed_by_user_id is null then
-    if not public.has_household_permission(v_item.household_id, 'log_others_consumption') then
-      raise exception 'You do not have permission to record shared consumption.';
+    if not private.has_household_permission(v_item.household_id, 'log_others_consumption') then
+      raise exception 'You do not have permission to record shared household consumption.';
     end if;
   else
     if not exists (
@@ -534,11 +770,11 @@ begin
     end if;
 
     if p_consumed_by_user_id = v_actor then
-      if not public.has_household_permission(v_item.household_id, 'log_own_consumption') then
+      if not private.has_household_permission(v_item.household_id, 'log_own_consumption') then
         raise exception 'You do not have permission to record your own consumption.';
       end if;
     else
-      if not public.has_household_permission(v_item.household_id, 'log_others_consumption') then
+      if not private.has_household_permission(v_item.household_id, 'log_others_consumption') then
         raise exception 'You do not have permission to record another member''s consumption.';
       end if;
     end if;
@@ -548,12 +784,10 @@ begin
     raise exception 'Consumption exceeds the available inventory.';
   end if;
 
-  perform set_config('foodsaver.skip_movement_log', 'true', true);
   update public.pantry_items
   set quantity_base = quantity_base - p_quantity_base,
       updated_by = v_actor
   where id = p_pantry_item_id;
-  perform set_config('foodsaver.skip_movement_log', 'false', true);
 
   insert into public.inventory_movements (
     household_id, pantry_item_id, movement_type, quantity_delta,
@@ -567,10 +801,9 @@ begin
 
   return v_movement_id;
 end;
-$$;
+$fn$;
 
--- Record food waste separately from consumption.
-create or replace function public.record_food_waste(
+create or replace function private.record_food_waste_impl(
   p_pantry_item_id uuid,
   p_quantity_base numeric,
   p_reason text default null
@@ -578,8 +811,8 @@ create or replace function public.record_food_waste(
 returns uuid
 language plpgsql
 security definer
-set search_path = public
-as $$
+set search_path = ''
+as $fn$
 declare
   v_actor uuid := auth.uid();
   v_item public.pantry_items%rowtype;
@@ -597,26 +830,23 @@ begin
 
   select * into v_item
   from public.pantry_items
-  where id = p_pantry_item_id
-    and archived_at is null
+  where id = p_pantry_item_id and archived_at is null
   for update;
 
   if not found then
     raise exception 'Pantry item was not found.';
   end if;
-  if not public.has_household_permission(v_item.household_id, 'record_waste') then
+  if not private.has_household_permission(v_item.household_id, 'record_waste') then
     raise exception 'You do not have permission to record food waste.';
   end if;
   if p_quantity_base > v_item.quantity_base then
     raise exception 'Waste quantity exceeds the available inventory.';
   end if;
 
-  perform set_config('foodsaver.skip_movement_log', 'true', true);
   update public.pantry_items
   set quantity_base = quantity_base - p_quantity_base,
       updated_by = v_actor
   where id = p_pantry_item_id;
-  perform set_config('foodsaver.skip_movement_log', 'false', true);
 
   insert into public.inventory_movements (
     household_id, pantry_item_id, movement_type, quantity_delta,
@@ -630,15 +860,14 @@ begin
 
   return v_movement_id;
 end;
-$$;
+$fn$;
 
--- Undo a movement without deleting the original audit record.
-create or replace function public.reverse_inventory_movement(p_movement_id uuid)
+create or replace function private.reverse_inventory_movement_impl(p_movement_id uuid)
 returns uuid
 language plpgsql
 security definer
-set search_path = public
-as $$
+set search_path = ''
+as $fn$
 declare
   v_actor uuid := auth.uid();
   v_movement public.inventory_movements%rowtype;
@@ -662,7 +891,7 @@ begin
     raise exception 'A reversal cannot itself be reversed.';
   end if;
   if v_actor <> v_movement.actor_user_id
-     and not public.has_household_permission(v_movement.household_id, 'manage_inventory') then
+     and not private.has_household_permission(v_movement.household_id, 'manage_inventory') then
     raise exception 'You can only undo your own entry unless you can manage inventory.';
   end if;
   if exists (
@@ -686,12 +915,10 @@ begin
     raise exception 'This entry cannot be undone because the available stock has since changed.';
   end if;
 
-  perform set_config('foodsaver.skip_movement_log', 'true', true);
   update public.pantry_items
   set quantity_base = v_new_quantity,
       updated_by = v_actor
   where id = v_item.id;
-  perform set_config('foodsaver.skip_movement_log', 'false', true);
 
   insert into public.inventory_movements (
     household_id, pantry_item_id, movement_type, quantity_delta,
@@ -705,54 +932,173 @@ begin
 
   return v_reversal_id;
 end;
-$$;
+$fn$;
 
 -- ---------------------------------------------------------------------------
--- Row Level Security
+-- Public, invoker-rights RPC wrappers. Private routines perform the validated
+-- operation; the private schema is intentionally not exposed through the API.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.create_household(p_name text)
+returns uuid
+language sql
+security invoker
+set search_path = ''
+as $fn$
+  select private.create_household_impl(p_name);
+$fn$;
+
+create or replace function public.update_household_member_permissions(
+  p_member_id uuid,
+  p_role text default null,
+  p_can_manage_inventory boolean default null,
+  p_can_log_own_consumption boolean default null,
+  p_can_log_others_consumption boolean default null,
+  p_can_record_waste boolean default null,
+  p_can_view_household_analytics boolean default null,
+  p_can_manage_members boolean default null
+)
+returns void
+language sql
+security invoker
+set search_path = ''
+as $fn$
+  select private.update_household_member_permissions_impl(
+    p_member_id, p_role, p_can_manage_inventory, p_can_log_own_consumption,
+    p_can_log_others_consumption, p_can_record_waste,
+    p_can_view_household_analytics, p_can_manage_members
+  );
+$fn$;
+
+create or replace function public.create_household_invitation(
+  p_household_id uuid,
+  p_email text,
+  p_token_hash text
+)
+returns uuid
+language sql
+security invoker
+set search_path = ''
+as $fn$
+  select private.create_household_invitation_impl(p_household_id, p_email, p_token_hash);
+$fn$;
+
+create or replace function public.accept_household_invitation(p_token text)
+returns uuid
+language sql
+security invoker
+set search_path = ''
+as $fn$
+  select private.accept_household_invitation_impl(p_token);
+$fn$;
+
+create or replace function public.add_inventory_stock(
+  p_pantry_item_id uuid,
+  p_quantity_base numeric
+)
+returns uuid
+language sql
+security invoker
+set search_path = ''
+as $fn$
+  select private.add_inventory_stock_impl(p_pantry_item_id, p_quantity_base);
+$fn$;
+
+create or replace function public.adjust_inventory_stock(
+  p_pantry_item_id uuid,
+  p_quantity_delta_base numeric
+)
+returns uuid
+language sql
+security invoker
+set search_path = ''
+as $fn$
+  select private.adjust_inventory_stock_impl(p_pantry_item_id, p_quantity_delta_base);
+$fn$;
+
+create or replace function public.record_consumption(
+  p_pantry_item_id uuid,
+  p_quantity_base numeric,
+  p_consumed_by_user_id uuid default null
+)
+returns uuid
+language sql
+security invoker
+set search_path = ''
+as $fn$
+  select private.record_consumption_impl(p_pantry_item_id, p_quantity_base, p_consumed_by_user_id);
+$fn$;
+
+create or replace function public.record_food_waste(
+  p_pantry_item_id uuid,
+  p_quantity_base numeric,
+  p_reason text default null
+)
+returns uuid
+language sql
+security invoker
+set search_path = ''
+as $fn$
+  select private.record_food_waste_impl(p_pantry_item_id, p_quantity_base, p_reason);
+$fn$;
+
+create or replace function public.reverse_inventory_movement(p_movement_id uuid)
+returns uuid
+language sql
+security invoker
+set search_path = ''
+as $fn$
+  select private.reverse_inventory_movement_impl(p_movement_id);
+$fn$;
+
+-- ---------------------------------------------------------------------------
+-- Row Level Security on every exposed table
 -- ---------------------------------------------------------------------------
 
 alter table public.profiles enable row level security;
 alter table public.households enable row level security;
 alter table public.household_members enable row level security;
+alter table public.household_invitations enable row level security;
 alter table public.food_categories enable row level security;
 alter table public.storage_locations enable row level security;
 alter table public.pantry_items enable row level security;
 alter table public.inventory_movements enable row level security;
 
-create policy "Profiles are visible to self and household members"
+create policy "Profiles visible to self and household members"
 on public.profiles for select to authenticated
 using (
-  id = auth.uid()
+  id = (select auth.uid())
   or exists (
     select 1
     from public.household_members mine
     join public.household_members theirs
       on theirs.household_id = mine.household_id
-    where mine.user_id = auth.uid()
+    where mine.user_id = (select auth.uid())
       and theirs.user_id = profiles.id
   )
 );
 
 create policy "Users update their own profile"
 on public.profiles for update to authenticated
-using (id = auth.uid())
-with check (id = auth.uid());
+using (id = (select auth.uid()))
+with check (id = (select auth.uid()));
 
 create policy "Household members can view their households"
 on public.households for select to authenticated
-using (public.is_household_member(id));
+using ((select private.is_household_member(id)));
 
-create policy "Owner can update household details"
+create policy "Only the Owner can update household details"
 on public.households for update to authenticated
-using (public.is_household_owner(id))
-with check (public.is_household_owner(id));
+using ((select private.is_household_owner(id)))
+with check ((select private.is_household_owner(id)));
 
 create policy "Household members can view the member list"
 on public.household_members for select to authenticated
-using (public.is_household_member(household_id));
+using ((select private.is_household_member(household_id)));
 
--- Membership roles and permissions are changed only through the controlled RPC below.
--- There is deliberately no direct UPDATE policy or table grant for clients.
+create policy "Household managers can view invitations"
+on public.household_invitations for select to authenticated
+using ((select private.has_household_permission(household_id, 'manage_members')));
 
 create policy "Authenticated users can view food categories"
 on public.food_categories for select to authenticated
@@ -760,48 +1106,49 @@ using (true);
 
 create policy "Members can view storage locations"
 on public.storage_locations for select to authenticated
-using (public.is_household_member(household_id));
+using ((select private.is_household_member(household_id)));
 
-create policy "Permitted members manage storage locations"
+create policy "Permitted members create storage locations"
 on public.storage_locations for insert to authenticated
-with check (public.has_household_permission(household_id, 'manage_inventory'));
+with check ((select private.has_household_permission(household_id, 'manage_inventory')));
 
 create policy "Permitted members update storage locations"
 on public.storage_locations for update to authenticated
-using (public.has_household_permission(household_id, 'manage_inventory'))
-with check (public.has_household_permission(household_id, 'manage_inventory'));
+using ((select private.has_household_permission(household_id, 'manage_inventory')))
+with check ((select private.has_household_permission(household_id, 'manage_inventory')));
 
-create policy "Permitted members delete storage locations"
+create policy "Permitted members archive storage locations"
 on public.storage_locations for delete to authenticated
-using (public.has_household_permission(household_id, 'manage_inventory'));
+using ((select private.has_household_permission(household_id, 'manage_inventory')));
 
-create policy "Household members can view active and archived pantry items"
+create policy "Household members can view pantry items"
 on public.pantry_items for select to authenticated
-using (public.is_household_member(household_id));
+using ((select private.is_household_member(household_id)));
 
 create policy "Permitted members add pantry items"
 on public.pantry_items for insert to authenticated
-with check (public.has_household_permission(household_id, 'manage_inventory'));
+with check ((select private.has_household_permission(household_id, 'manage_inventory')));
 
-create policy "Permitted members update pantry items"
+create policy "Permitted members update pantry metadata"
 on public.pantry_items for update to authenticated
-using (public.has_household_permission(household_id, 'manage_inventory'))
-with check (public.has_household_permission(household_id, 'manage_inventory'));
+using ((select private.has_household_permission(household_id, 'manage_inventory')))
+with check ((select private.has_household_permission(household_id, 'manage_inventory')));
 
-create policy "Members see household analytics or their own activity"
+create policy "Household members view permitted inventory history"
 on public.inventory_movements for select to authenticated
 using (
-  public.has_household_permission(household_id, 'view_household_analytics')
-  or actor_user_id = auth.uid()
-  or consumed_by_user_id = auth.uid()
+  (select private.has_household_permission(household_id, 'view_household_analytics'))
+  or actor_user_id = (select auth.uid())
+  or consumed_by_user_id = (select auth.uid())
 );
 
--- No direct insert/update/delete policies for inventory_movements:
--- changes must go through the stock-change trigger or controlled RPC functions.
+-- ---------------------------------------------------------------------------
+-- Least-privilege Data API grants
+-- ---------------------------------------------------------------------------
 
--- ---------------------------------------------------------------------------
--- Explicit API grants. RLS policies above still determine which rows are visible.
--- ---------------------------------------------------------------------------
+revoke all on all tables in schema public from anon, authenticated, service_role;
+revoke all on all sequences in schema public from anon, authenticated, service_role;
+revoke execute on all functions in schema public from public, anon, authenticated, service_role;
 
 grant usage on schema public to authenticated;
 
@@ -812,7 +1159,7 @@ grant select, update (name)
   on public.households to authenticated;
 
 grant select on public.household_members to authenticated;
-
+grant select on public.household_invitations to authenticated;
 grant select on public.food_categories to authenticated;
 
 grant select, insert, update (name, is_active, sort_order), delete
@@ -825,28 +1172,65 @@ grant select,
         alert_days_before, notes
       ),
       update (
-        name, category_key, storage_location_id, quantity_base,
-        display_unit, expiry_date, alert_days_before, notes,
-        updated_by, archived_at
+        name, category_key, storage_location_id, display_unit,
+        expiry_date, alert_days_before, notes, updated_by, archived_at
       )
   on public.pantry_items to authenticated;
 
 grant select on public.inventory_movements to authenticated;
 
-revoke all on function public.is_household_member(uuid) from public;
-revoke all on function public.is_household_owner(uuid) from public;
-revoke all on function public.has_household_permission(uuid, text) from public;
-revoke all on function public.create_household(text) from public;
-revoke all on function public.update_household_member_permissions(uuid, text, boolean, boolean, boolean, boolean, boolean, boolean) from public;
-revoke all on function public.record_consumption(uuid, numeric, uuid) from public;
-revoke all on function public.record_food_waste(uuid, numeric, text) from public;
-revoke all on function public.reverse_inventory_movement(uuid) from public;
+-- Private helper functions used by policies.
+revoke all on function private.is_household_member(uuid) from public, anon, authenticated;
+revoke all on function private.is_household_owner(uuid) from public, anon, authenticated;
+revoke all on function private.has_household_permission(uuid, text) from public, anon, authenticated;
+grant execute on function private.is_household_member(uuid) to authenticated;
+grant execute on function private.is_household_owner(uuid) to authenticated;
+grant execute on function private.has_household_permission(uuid, text) to authenticated;
 
-grant execute on function public.is_household_member(uuid) to authenticated;
-grant execute on function public.is_household_owner(uuid) to authenticated;
-grant execute on function public.has_household_permission(uuid, text) to authenticated;
+-- Private operation routines are callable only by authenticated users through
+-- the public invoker-rights RPC wrappers (and are not directly API-exposed).
+revoke all on function private.create_household_impl(text) from public, anon, authenticated;
+revoke all on function private.update_household_member_permissions_impl(uuid, text, boolean, boolean, boolean, boolean, boolean, boolean) from public, anon, authenticated;
+revoke all on function private.create_household_invitation_impl(uuid, text, text) from public, anon, authenticated;
+revoke all on function private.accept_household_invitation_impl(text) from public, anon, authenticated;
+revoke all on function private.add_inventory_stock_impl(uuid, numeric) from public, anon, authenticated;
+revoke all on function private.adjust_inventory_stock_impl(uuid, numeric) from public, anon, authenticated;
+revoke all on function private.record_consumption_impl(uuid, numeric, uuid) from public, anon, authenticated;
+revoke all on function private.record_food_waste_impl(uuid, numeric, text) from public, anon, authenticated;
+revoke all on function private.reverse_inventory_movement_impl(uuid) from public, anon, authenticated;
+
+grant execute on function private.create_household_impl(text) to authenticated;
+grant execute on function private.update_household_member_permissions_impl(uuid, text, boolean, boolean, boolean, boolean, boolean, boolean) to authenticated;
+grant execute on function private.create_household_invitation_impl(uuid, text, text) to authenticated;
+grant execute on function private.accept_household_invitation_impl(text) to authenticated;
+grant execute on function private.add_inventory_stock_impl(uuid, numeric) to authenticated;
+grant execute on function private.adjust_inventory_stock_impl(uuid, numeric) to authenticated;
+grant execute on function private.record_consumption_impl(uuid, numeric, uuid) to authenticated;
+grant execute on function private.record_food_waste_impl(uuid, numeric, text) to authenticated;
+grant execute on function private.reverse_inventory_movement_impl(uuid) to authenticated;
+
+-- Trigger routines are not callable as RPCs.
+revoke all on function private.set_updated_at() from public, anon, authenticated;
+revoke all on function private.handle_new_user() from public, anon, authenticated;
+revoke all on function private.log_initial_pantry_stock() from public, anon, authenticated;
+
+-- Public RPCs are intentionally available only to authenticated clients.
+revoke all on function public.create_household(text) from public, anon, authenticated;
+revoke all on function public.update_household_member_permissions(uuid, text, boolean, boolean, boolean, boolean, boolean, boolean) from public, anon, authenticated;
+revoke all on function public.create_household_invitation(uuid, text, text) from public, anon, authenticated;
+revoke all on function public.accept_household_invitation(text) from public, anon, authenticated;
+revoke all on function public.add_inventory_stock(uuid, numeric) from public, anon, authenticated;
+revoke all on function public.adjust_inventory_stock(uuid, numeric) from public, anon, authenticated;
+revoke all on function public.record_consumption(uuid, numeric, uuid) from public, anon, authenticated;
+revoke all on function public.record_food_waste(uuid, numeric, text) from public, anon, authenticated;
+revoke all on function public.reverse_inventory_movement(uuid) from public, anon, authenticated;
+
 grant execute on function public.create_household(text) to authenticated;
 grant execute on function public.update_household_member_permissions(uuid, text, boolean, boolean, boolean, boolean, boolean, boolean) to authenticated;
+grant execute on function public.create_household_invitation(uuid, text, text) to authenticated;
+grant execute on function public.accept_household_invitation(text) to authenticated;
+grant execute on function public.add_inventory_stock(uuid, numeric) to authenticated;
+grant execute on function public.adjust_inventory_stock(uuid, numeric) to authenticated;
 grant execute on function public.record_consumption(uuid, numeric, uuid) to authenticated;
 grant execute on function public.record_food_waste(uuid, numeric, text) to authenticated;
 grant execute on function public.reverse_inventory_movement(uuid) to authenticated;
