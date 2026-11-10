@@ -415,7 +415,7 @@ begin
     raise exception 'You must be signed in.';
   end if;
 
-  select hm.*, h.owner_user_id
+  select hm, h.owner_user_id
     into v_target, v_owner_user_id
   from public.household_members hm
   join public.households h on h.id = hm.household_id
