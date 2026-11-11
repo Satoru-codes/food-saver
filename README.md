@@ -51,3 +51,28 @@ The current development entry point implements:
 - Initial household creation using the `create_household` database function
 
 Pantry CRUD and inventory synchronization are the next milestone. The legacy single-file prototype is preserved as `initial app`; its browser localStorage data is not automatically imported.
+
+## Supabase signup confirmation email template
+
+The app verifies confirmation tokens in the browser using `supabase.auth.verifyOtp({ token_hash, type: "email" })`. To avoid email security scanners consuming Supabase's one-time `/verify` URL, change the **Authentication → Email Templates → Confirm signup** template in the FoodSaver-dev project.
+
+Set the subject to:
+
+`Confirm your FoodSaver email address`
+
+Replace the template body with:
+
+```html
+<h2>Confirm your FoodSaver email address</h2>
+<p>Follow this link to verify your email address and finish creating your account.</p>
+<p>
+  <a href="{{ .RedirectTo }}&amp;token_hash={{ .TokenHash }}&amp;type=email">
+    Confirm email address
+  </a>
+</p>
+<p>If you did not create a FoodSaver account, you can ignore this email.</p>
+```
+
+Keep the `{{ .RedirectTo }}` variable: the app passes the current allowed FoodSaver URL there, including the pending household invitation token when one is present. Do not use `{{ .ConfirmationURL }}` in this template, as that sends the recipient through the one-time GET verification endpoint that may be prefetched by email security tools.
+
+After saving the template, use the **Resend confirmation email** action on FoodSaver for any account that is still unconfirmed. The recipient must open the newest confirmation email. This setting affects future signup confirmation emails only; it does not change password recovery or other email templates.
