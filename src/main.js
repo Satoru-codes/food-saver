@@ -1,5 +1,6 @@
 import "./style.css";
 import { isSupabaseConfigured, supabase } from "./lib/supabase.js";
+import { mountPantry } from "./pantry.js";
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -115,6 +116,8 @@ const text = {
 let language = localStorage.getItem("foodsaver_language") || "en";
 let currentUser = null;
 let isSubmitting = false;
+let pantryController = null;
+let activeHouseholdId = null;
 
 function t(key) {
   return text[language]?.[key] ?? text.en[key] ?? key;
@@ -158,6 +161,13 @@ function setBusy(form, busy) {
 }
 
 function showAuthPanel(panel) {
+  if (pantryController) {
+    pantryController.destroy();
+    pantryController = null;
+    activeHouseholdId = null;
+  }
+  $("#auth-hero").hidden = false;
+  $("#workspace-view").hidden = true;
   $("#auth-card").hidden = false;
   $("#household-card").hidden = true;
   $("#workspace-card").hidden = true;
@@ -186,13 +196,20 @@ function friendlyError(error) {
 async function loadHouseholds() {
   const { data: memberships, error: memberError } = await supabase
     .from("household_members")
-    .select("household_id, role")
+    .select("household_id, role, can_manage_inventory, can_log_own_consumption, can_log_others_consumption, can_record_waste, can_view_household_analytics, can_manage_members")
     .eq("user_id", currentUser.id);
 
   if (memberError) throw memberError;
 
   const ids = [...new Set((memberships || []).map((item) => item.household_id))];
   if (ids.length === 0) {
+    if (pantryController) {
+      pantryController.destroy();
+      pantryController = null;
+      activeHouseholdId = null;
+    }
+    $("#auth-hero").hidden = false;
+    $("#workspace-view").hidden = true;
     $("#auth-card").hidden = true;
     $("#workspace-card").hidden = true;
     $("#household-card").hidden = false;
@@ -208,24 +225,42 @@ async function loadHouseholds() {
 
   const household = (households || [])[0];
   const membership = memberships.find((item) => item.household_id === household?.id);
-
   if (!household || !membership) {
-    showStatus("Your membership is present, but household details could not be loaded.", "error");
-    return;
+    throw new Error("Your household membership is present, but household details could not be loaded.");
   }
 
+  $("#auth-hero").hidden = true;
+  $("#workspace-view").hidden = false;
   $("#auth-card").hidden = true;
   $("#household-card").hidden = true;
-  $("#workspace-card").hidden = false;
-  $("#workspace-household-name").textContent = household.name;
-  $("#workspace-role").textContent =
-    membership.role === "owner" ? t("roleOwner") :
-    membership.role === "admin" ? t("roleAdmin") : t("roleMember");
-}
+  $("#workspace-card").hidden = true;
 
+  if (activeHouseholdId !== household.id || !pantryController) {
+    if (pantryController) pantryController.destroy();
+    activeHouseholdId = household.id;
+    pantryController = mountPantry({
+      supabase,
+      container: $("#pantry-root"),
+      household,
+      membership,
+      user: currentUser,
+      language,
+      onSignOut: signOut
+    });
+  } else {
+    await pantryController.reload();
+  }
+}
 async function syncSession(session) {
   currentUser = session?.user ?? null;
   if (!currentUser) {
+    if (pantryController) {
+      pantryController.destroy();
+      pantryController = null;
+      activeHouseholdId = null;
+    }
+    $("#auth-hero").hidden = false;
+    $("#workspace-view").hidden = true;
     $("#household-card").hidden = true;
     $("#workspace-card").hidden = true;
     showAuthPanel("signin");
@@ -265,6 +300,7 @@ $("#language-select").addEventListener("change", async (event) => {
   language = event.target.value === "hi" ? "hi" : "en";
   localStorage.setItem("foodsaver_language", language);
   applyLanguage();
+  if (pantryController) pantryController.setLanguage(language);
   await updateProfileLanguage(language);
 });
 
