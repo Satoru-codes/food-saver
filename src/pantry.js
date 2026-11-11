@@ -41,6 +41,12 @@ const EN = {
   copyManually:"Copy the link below and send it privately.",
   inviteExpiry:"This link expires in 7 days and can only be used once by the invited email address.",
   inviteError:"Could not create the invitation. Check your permission and try again.",
+  confirmTestTitle:"Private testing: resolve an unconfirmed invite",
+  confirmTestExplain:"This confirms only an existing account with an active invitation to this household. It bypasses email ownership checks, so use it only for a trusted tester who has asked to join.",
+  existingInvitedEmail:"Existing invited email address",
+  confirmTestButton:"Confirm invited account for testing",
+  confirmTestSuccess:"The invited account is confirmed. Ask your friend to sign in again with this email.",
+  confirmTestError:"Could not confirm the invited account.",
   close:"Close",
   kg:"kg", g:"g", L:"L", ml:"ml", pcs:"pieces", pack:"packs", unit:"units"
 };
@@ -88,6 +94,12 @@ const HI = {
   copyManually:"नीचे दिए गए लिंक को कॉपी करके निजी रूप से भेजें।",
   inviteExpiry:"यह लिंक 7 दिनों में समाप्त होगा और आमंत्रित ईमेल से केवल एक बार उपयोग किया जा सकता है।",
   inviteError:"आमंत्रण नहीं बन सका। अनुमति जाँचकर फिर कोशिश करें।",
+  confirmTestTitle:"निजी परीक्षण: अपुष्ट आमंत्रण ठीक करें",
+  confirmTestExplain:"यह केवल उस मौजूदा खाते की पुष्टि करेगा जिसके लिए इस परिवार में सक्रिय आमंत्रण है। इससे ईमेल स्वामित्व की जाँच हट जाती है, इसलिए केवल भरोसेमंद परीक्षक के लिए इस्तेमाल करें।",
+  existingInvitedEmail:"आमंत्रित ईमेल पता",
+  confirmTestButton:"परीक्षण के लिए आमंत्रित खाते की पुष्टि करें",
+  confirmTestSuccess:"आमंत्रित खाते की पुष्टि हो गई। अपने मित्र से इसी ईमेल से दोबारा साइन इन करने को कहें।",
+  confirmTestError:"आमंत्रित खाते की पुष्टि नहीं हो सकी।",
   close:"बंद करें",
   kg:"किलो", g:"ग्राम", L:"लीटर", ml:"मिलीलीटर", pcs:"नग", pack:"पैक", unit:"इकाई"
 };
@@ -197,6 +209,7 @@ export function mountPantry(config) {
     '<label>' + escapeHtml(t("inviteEmail")) + '<input class="field-input" id="invite-email" name="email" type="email" autocomplete="email" maxlength="254" required placeholder="friend@example.com" /></label>',
     '<p class="inline-message" id="invite-message" role="status" aria-live="polite" hidden></p>',
     '<div id="invite-result" hidden><p class="invite-created-note">' + escapeHtml(t("invitationCreated")) + '</p><input class="field-input invite-link-field" id="invite-link" type="text" readonly aria-label="' + escapeHtml(t("inviteTitle")) + '" /><p class="invite-expiry-note">' + escapeHtml(t("inviteExpiry")) + '</p><p class="invite-expiry-note">' + escapeHtml(t("copyManually")) + '</p><button class="quiet-button" type="button" data-action="copy-invite">' + escapeHtml(t("copyLink")) + '</button></div>',
+    '<details class="invite-test-tools"><summary>' + escapeHtml(t("confirmTestTitle")) + '</summary><p>' + escapeHtml(t("confirmTestExplain")) + '</p><label>' + escapeHtml(t("existingInvitedEmail")) + '<input class="field-input" id="confirm-test-email" type="email" autocomplete="email" maxlength="254" placeholder="friend@example.com" /></label><button class="quiet-button" type="button" data-action="confirm-test-account">' + escapeHtml(t("confirmTestButton")) + '</button><p class="inline-message" id="confirm-test-message" role="status" aria-live="polite" hidden></p></details>',
     '<div class="form-actions"><button type="button" class="quiet-button" data-action="close-invite">' + escapeHtml(t("close")) + '</button><button type="submit" class="pantry-primary" id="invite-submit">' + escapeHtml(t("createInvite")) + '</button></div></form></dialog>',
     '<div id="pantry-toast" class="pantry-toast" role="status" aria-live="polite" hidden></div></div>'
   ].join("");
@@ -549,6 +562,43 @@ export function mountPantry(config) {
     }
   }
 
+  async function confirmInvitedTestAccount() {
+    if (!canInviteMembers || busy) return;
+    const email = String($("#confirm-test-email").value || "").trim().toLowerCase();
+    const message = $("#confirm-test-message");
+    if (!email) {
+      message.textContent = t("existingInvitedEmail");
+      message.className = "inline-message error";
+      message.hidden = false;
+      $("#confirm-test-email").focus();
+      return;
+    }
+
+    if (!window.confirm(t("confirmTestExplain"))) return;
+    busy = true;
+    const button = container.querySelector('[data-action="confirm-test-account"]');
+    button.disabled = true;
+    message.hidden = true;
+    try {
+      const { data, error } = await supabase.functions.invoke("confirm-invited-email", {
+        body: { email: email }
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error || t("confirmTestError"));
+      message.textContent = data.message || t("confirmTestSuccess");
+      message.className = "inline-message success";
+      message.hidden = false;
+      toast(t("confirmTestSuccess"));
+    } catch (error) {
+      message.textContent = error.message || t("confirmTestError");
+      message.className = "inline-message error";
+      message.hidden = false;
+    } finally {
+      busy = false;
+      button.disabled = false;
+    }
+  }
+
   async function copyInvitationLink() {
     const field = $("#invite-link");
     if (!field.value) return;
@@ -671,6 +721,7 @@ export function mountPantry(config) {
     if (action === "open-invite") openInviteDialog();
     if (action === "close-invite") $("#invite-dialog").close();
     if (action === "copy-invite") await copyInvitationLink();
+    if (action === "confirm-test-account") await confirmInvitedTestAccount();
     if (action === "edit-item") openItemForm(items.find(function(item) { return item.id === id; }));
     if (action === "close-item-form") { $("#pantry-item-form-wrap").hidden = true; editingItem = null; }
     if (action === "restock-item") {
