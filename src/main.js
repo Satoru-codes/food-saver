@@ -59,6 +59,9 @@ const text = {
     inviteNotice: "You've been invited to a FoodSaver household. Create an account or sign in using the exact email address that received the invitation.",
     resendConfirmation: "Resend confirmation email",
     confirmationResent: "A new confirmation email has been requested. Open the newest email and use its Confirm email address link.",
+    confirmEmailTitle: "Confirm your email address",
+    confirmEmailIntro: "Tap the button below to finish verifying your email address.",
+    confirmEmailButton: "Confirm email address",
     confirmationVerified: "Email confirmed. Your account is now ready.",
     confirmationFailed: "We couldn't verify that confirmation link. Request a new confirmation email and use the newest link.",
     selectHousehold: "Your households"
@@ -117,6 +120,9 @@ const text = {
     inviteNotice: "आपको FoodSaver परिवार में आमंत्रित किया गया है। आमंत्रण पाने वाले उसी ईमेल पते से खाता बनाएँ या साइन इन करें।",
     resendConfirmation: "पुष्टि ईमेल दोबारा भेजें",
     confirmationResent: "नया पुष्टि ईमेल भेजने का अनुरोध किया गया है। सबसे नया ईमेल खोलकर पुष्टि लिंक इस्तेमाल करें।",
+    confirmEmailTitle: "अपने ईमेल पते की पुष्टि करें",
+    confirmEmailIntro: "ईमेल की पुष्टि पूरी करने के लिए नीचे दिए गए बटन को दबाएँ।",
+    confirmEmailButton: "ईमेल पते की पुष्टि करें",
     confirmationVerified: "ईमेल की पुष्टि हो गई है। आपका खाता तैयार है।",
     confirmationFailed: "इस पुष्टि लिंक से ईमेल सत्यापित नहीं हो सका। नया पुष्टि ईमेल मँगाएँ और सबसे नया लिंक खोलें।",
     selectHousehold: "आपके परिवार"
@@ -133,6 +139,8 @@ let activeMembership = null;
 let pendingInviteToken = new URL(window.location.href).searchParams.get("invite");
 let inviteAcceptancePromise = null;
 let inviteAccepted = false;
+let pendingConfirmationTokenHash = new URL(window.location.href).searchParams.get("token_hash");
+let pendingConfirmationType = new URL(window.location.href).searchParams.get("type");
 
 function t(key) {
   return text[language]?.[key] ?? text.en[key] ?? key;
@@ -192,6 +200,7 @@ function showAuthPanel(panel) {
   $("#signup-panel").hidden = panel !== "signup";
   $("#reset-panel").hidden = panel !== "reset";
   $("#new-password-panel").hidden = panel !== "new-password";
+  $("#confirm-email-panel").hidden = panel !== "confirm-email";
   $("#tab-signin").classList.toggle("active", panel === "signin");
   $("#tab-signup").classList.toggle("active", panel === "signup");
   $("#tab-signin").setAttribute("aria-selected", String(panel === "signin"));
@@ -384,6 +393,52 @@ $("#language-select").addEventListener("change", async (event) => {
 
 $("#tab-signin").addEventListener("click", () => showAuthPanel("signin"));
 $("#tab-signup").addEventListener("click", () => showAuthPanel("signup"));
+$("#confirm-email-submit").addEventListener("click", async () => {
+  if (!pendingConfirmationTokenHash || pendingConfirmationType !== "email" || isSubmitting) {
+    showStatus(t("confirmationFailed"), "error");
+    return;
+  }
+
+  const button = $("#confirm-email-submit");
+  isSubmitting = true;
+  button.disabled = true;
+  try {
+    const { data, error } = await supabase.auth.verifyOtp({
+      token_hash: pendingConfirmationTokenHash,
+      type: "email"
+    });
+    if (error) throw error;
+
+    pendingConfirmationTokenHash = null;
+    pendingConfirmationType = null;
+    const cleanUrl = new URL(window.location.href);
+    cleanUrl.searchParams.delete("token_hash");
+    cleanUrl.searchParams.delete("type");
+    cleanUrl.searchParams.delete("error");
+    cleanUrl.searchParams.delete("error_code");
+    cleanUrl.searchParams.delete("error_description");
+    window.history.replaceState({}, document.title, cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
+
+    showStatus(t("confirmationVerified"), "success");
+    await syncSession(data.session);
+  } catch (error) {
+    showStatus(t("confirmationFailed") + " " + friendlyError(error), "error");
+  } finally {
+    isSubmitting = false;
+    button.disabled = false;
+  }
+});
+
+$("#confirmation-back-to-signin").addEventListener("click", () => {
+  pendingConfirmationTokenHash = null;
+  pendingConfirmationType = null;
+  const cleanUrl = new URL(window.location.href);
+  cleanUrl.searchParams.delete("token_hash");
+  cleanUrl.searchParams.delete("type");
+  window.history.replaceState({}, document.title, cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
+  showAuthPanel("signin");
+});
+
 $("#resend-confirmation").addEventListener("click", async () => {
   const email = String($("#signin-email").value || "").trim();
   if (!email) {
@@ -574,38 +629,14 @@ if (!isSupabaseConfigured) {
     }, 0);
   });
 
-  const confirmationParams = new URLSearchParams(window.location.search);
-  const confirmationTokenHash = confirmationParams.get("token_hash");
-  const confirmationType = confirmationParams.get("type");
-
-  if (confirmationTokenHash && confirmationType === "email") {
-    const verificationButton = $("#signin-submit");
-    verificationButton.disabled = true;
-    try {
-      const { error } = await supabase.auth.verifyOtp({
-        token_hash: confirmationTokenHash,
-        type: "email"
-      });
-      if (error) throw error;
-
-      // Remove the one-time token from the address bar immediately; keep the
-      // household invite token so it can be accepted after the verified session loads.
-      const cleanUrl = new URL(window.location.href);
-      cleanUrl.searchParams.delete("token_hash");
-      cleanUrl.searchParams.delete("type");
-      cleanUrl.searchParams.delete("error");
-      cleanUrl.searchParams.delete("error_code");
-      cleanUrl.searchParams.delete("error_description");
-      window.history.replaceState({}, document.title, cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
-      showStatus(t("confirmationVerified"), "success");
-    } catch (error) {
-      showStatus(t("confirmationFailed") + " " + friendlyError(error), "error");
-    } finally {
-      verificationButton.disabled = false;
-    }
+  if (pendingConfirmationTokenHash && pendingConfirmationType === "email") {
+    // Do not consume the one-time token on page load. Email security scanners
+    // can prefetch links; only verify after the actual user taps the button.
+    showAuthPanel("confirm-email");
+    showStatus(t("confirmEmailIntro"), "success");
+  } else {
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError) showStatus(friendlyError(sessionError), "error");
+    await syncSession(sessionData?.session ?? null);
   }
-
-  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-  if (sessionError) showStatus(friendlyError(sessionError), "error");
-  await syncSession(sessionData?.session ?? null);
 }
