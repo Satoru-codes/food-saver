@@ -120,6 +120,9 @@ let pantryController = null;
 let activeHouseholdId = null;
 let activeHousehold = null;
 let activeMembership = null;
+let pendingInviteToken = new URL(window.location.href).searchParams.get("invite");
+let inviteAcceptancePromise = null;
+let inviteAccepted = false;
 
 function t(key) {
   return text[language]?.[key] ?? text.en[key] ?? key;
@@ -184,6 +187,37 @@ function showAuthPanel(panel) {
   $("#tab-signin").setAttribute("aria-selected", String(panel === "signin"));
   $("#tab-signup").setAttribute("aria-selected", String(panel === "signup"));
   clearStatus();
+}
+
+function getAuthRedirectUrl() {
+  const redirectUrl = new URL(window.location.origin + window.location.pathname);
+  if (pendingInviteToken) redirectUrl.searchParams.set("invite", pendingInviteToken);
+  return redirectUrl.toString();
+}
+
+async function acceptPendingInvitation() {
+  if (!pendingInviteToken || !currentUser || inviteAccepted) return false;
+  if (inviteAcceptancePromise) return inviteAcceptancePromise;
+
+  inviteAcceptancePromise = (async () => {
+    const { error } = await supabase.rpc("accept_household_invitation", {
+      p_token: pendingInviteToken
+    });
+    if (error) throw error;
+
+    inviteAccepted = true;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("invite");
+    window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
+    pendingInviteToken = null;
+    return true;
+  })();
+
+  try {
+    return await inviteAcceptancePromise;
+  } finally {
+    inviteAcceptancePromise = null;
+  }
 }
 
 function friendlyError(error) {
@@ -290,6 +324,16 @@ async function syncSession(session) {
       applyLanguage();
     }
 
+    try {
+      await acceptPendingInvitation();
+    } catch (inviteError) {
+      const message = inviteError.message || "This invitation could not be accepted.";
+      await supabase.auth.signOut();
+      showAuthPanel("signin");
+      showStatus("This invitation may be expired, already used, or addressed to a different email. Sign in with the email address that received the invitation. " + message, "error");
+      return;
+    }
+
     await loadHouseholds();
   } catch (error) {
     showAuthPanel("signin");
@@ -371,7 +415,7 @@ $("#signup-form").addEventListener("submit", async (event) => {
       password,
       options: {
         data: { full_name: name, preferred_language: language },
-        emailRedirectTo: window.location.origin
+        emailRedirectTo: getAuthRedirectUrl()
       }
     });
     if (error) throw error;
