@@ -56,6 +56,7 @@ const text = {
     signedOut: "You have signed out.",
     genericError: "Something went wrong. Please try again.",
     noHouseholds: "No household is linked to this account yet.",
+    inviteNotice: "You've been invited to a FoodSaver household. Create an account or sign in using the exact email address that received the invitation.",
     selectHousehold: "Your households"
   },
   hi: {
@@ -109,6 +110,7 @@ const text = {
     signedOut: "आप साइन आउट हो गए हैं।",
     genericError: "कुछ गड़बड़ हुई। कृपया फिर कोशिश करें।",
     noHouseholds: "इस खाते से अभी कोई परिवार जुड़ा नहीं है।",
+    inviteNotice: "आपको FoodSaver परिवार में आमंत्रित किया गया है। आमंत्रण पाने वाले उसी ईमेल पते से खाता बनाएँ या साइन इन करें।",
     selectHousehold: "आपके परिवार"
   }
 };
@@ -308,6 +310,7 @@ async function syncSession(session) {
     $("#household-card").hidden = true;
     $("#workspace-card").hidden = true;
     showAuthPanel("signin");
+    if (pendingInviteToken) showStatus(t("inviteNotice"), "success");
     return;
   }
 
