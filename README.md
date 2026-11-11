@@ -37,7 +37,7 @@ The `netlify.toml` file configures the build command and `dist` publish director
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_PUBLISHABLE_KEY`
 
-Deploy previews are used for testing the `development` branch through a pull request. Do not change the production branch from `main` during development.
+Deploy previews are used for testing the `development` branch through a pull request. Do not change the production branch from `main` during development. The FoodSaver-dev URL and publishable key should be configured in Netlify before testing the preview. Because the current Netlify plan applies these variables to all deploy contexts, do not merge this development branch into production until production has a separate Supabase project and environment configuration.
 
 ## Current implementation milestone
 
