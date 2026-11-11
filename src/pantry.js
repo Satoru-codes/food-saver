@@ -47,7 +47,21 @@ const EN = {
   confirmTestButton:"Confirm invited account for testing",
   confirmTestSuccess:"The invited account is confirmed. Ask your friend to sign in again with this email.",
   confirmTestError:"Could not confirm the invited account.",
-  close:"Close",
+  manageMembers:"Manage members", membersTitle:"Household members", membersIntro:"Choose a member to manage their role and access.",
+  noManageableMembers:"There are no other members you can manage yet.",
+  roleLabel:"Household role", memberRole:"Member", adminRole:"Admin", ownerRole:"Owner",
+  makeAdmin:"Promote to Admin", makeMember:"Change to Member", savePermissions:"Save changes",
+  permissionsTitle:"Individual permissions", permissionInventory:"Manage inventory",
+  permissionOwn:"Log own consumption", permissionOthers:"Log others' consumption",
+  permissionWaste:"Record food waste", permissionHouseholdAnalytics:"View household-wide analytics",
+  permissionManageMembers:"Invite and manage members", adminNote:"Admins are trusted household managers. You can still customise their individual permissions.",
+  personalAnalytics:"My consumption this month", personalRecords:"Consumption records",
+  noPersonalData:"No consumption has been attributed to you this month yet.",
+  householdAnalytics:"Household overview this month", householdConsumption:"Consumption records",
+  householdWaste:"Food-waste records", noHouseholdData:"No household consumption or waste records this month yet.",
+  analyticsPrivacy:"Only your own attributed consumption is shown here.",
+  memberUpdated:"Member permissions updated.", roleUpdated:"Member role updated.",
+  selectMember:"Select a member", close:"Close",
   kg:"kg", g:"g", L:"L", ml:"ml", pcs:"pieces", pack:"packs", unit:"units"
 };
 
@@ -100,7 +114,21 @@ const HI = {
   confirmTestButton:"परीक्षण के लिए आमंत्रित खाते की पुष्टि करें",
   confirmTestSuccess:"आमंत्रित खाते की पुष्टि हो गई। अपने मित्र से इसी ईमेल से दोबारा साइन इन करने को कहें।",
   confirmTestError:"आमंत्रित खाते की पुष्टि नहीं हो सकी।",
-  close:"बंद करें",
+  manageMembers:"सदस्य प्रबंधित करें", membersTitle:"परिवार के सदस्य", membersIntro:"किसी सदस्य को चुनकर उसकी भूमिका और अनुमतियाँ बदलें।",
+  noManageableMembers:"अभी प्रबंधित करने के लिए कोई अन्य सदस्य नहीं है।",
+  roleLabel:"परिवार में भूमिका", memberRole:"Member", adminRole:"Admin", ownerRole:"Owner",
+  makeAdmin:"Admin बनाएँ", makeMember:"Member बनाएँ", savePermissions:"बदलाव सेव करें",
+  permissionsTitle:"अलग-अलग अनुमतियाँ", permissionInventory:"इन्वेंटरी प्रबंधित करें",
+  permissionOwn:"अपना इस्तेमाल दर्ज करें", permissionOthers:"दूसरों का इस्तेमाल दर्ज करें",
+  permissionWaste:"खाने की बर्बादी दर्ज करें", permissionHouseholdAnalytics:"पूरे परिवार का विश्लेषण देखें",
+  permissionManageMembers:"सदस्यों को आमंत्रित और प्रबंधित करें", adminNote:"Admin भरोसेमंद परिवार प्रबंधक होते हैं। उनकी अलग-अलग अनुमतियाँ भी बदली जा सकती हैं।",
+  personalAnalytics:"इस महीने मेरा इस्तेमाल", personalRecords:"इस्तेमाल के रिकॉर्ड",
+  noPersonalData:"इस महीने आपके नाम से अभी कोई इस्तेमाल दर्ज नहीं हुआ है।",
+  householdAnalytics:"इस महीने परिवार का विवरण", householdConsumption:"इस्तेमाल के रिकॉर्ड",
+  householdWaste:"खाने की बर्बादी के रिकॉर्ड", noHouseholdData:"इस महीने परिवार में इस्तेमाल या बर्बादी का कोई रिकॉर्ड नहीं है।",
+  analyticsPrivacy:"यहाँ केवल आपके नाम से दर्ज इस्तेमाल दिखाया जाता है।",
+  memberUpdated:"सदस्य की अनुमतियाँ अपडेट हो गईं।", roleUpdated:"सदस्य की भूमिका अपडेट हो गई।",
+  selectMember:"सदस्य चुनें", close:"बंद करें",
   kg:"किलो", g:"ग्राम", L:"लीटर", ml:"मिलीलीटर", pcs:"नग", pack:"पैक", unit:"इकाई"
 };
 
@@ -146,6 +174,10 @@ export function mountPantry(config) {
   let locations = [];
   let activities = [];
   let householdPeople = [];
+  let members = [];
+  let personalConsumption = [];
+  let householdMovements = [];
+  let selectedManagedMemberId = null;
   let editingItem = null;
   let selectedStockItem = null;
   let selectedLogItem = null;
@@ -162,6 +194,8 @@ export function mountPantry(config) {
   const canLogOthers = isOwner || membership.can_log_others_consumption === true;
   const canRecordWaste = isOwner || membership.can_record_waste === true;
   const canInviteMembers = isOwner || membership.can_manage_members === true;
+  const canManageMembers = canInviteMembers;
+  const canViewHouseholdAnalytics = isOwner || membership.can_view_household_analytics === true;
   const roleKey = membership.role === "owner" ? "roleOwner" : membership.role === "admin" ? "roleAdmin" : "roleMember";
   const t = function(key) { return (currentLanguage === "hi" ? HI[key] : EN[key]) || EN[key] || key; };
 
@@ -169,11 +203,15 @@ export function mountPantry(config) {
     '<div class="pantry-app">',
     '<section class="pantry-heading"><div><p class="eyebrow">' + escapeHtml(household.name) + '</p><h1>' + escapeHtml(t("pantry")) + '</h1><p class="pantry-subtitle">' + escapeHtml(t("subtitle")) + '</p></div>',
     '<div class="pantry-heading-actions"><span class="role-chip" id="pantry-role"></span><button class="quiet-button" type="button" data-action="refresh">' + escapeHtml(t("refresh")) + '</button><button class="quiet-button" type="button" data-action="signout">' + escapeHtml(t("signOut")) + '</button>',
+    canManageMembers ? '<button class="quiet-button" type="button" data-action="open-members">' + escapeHtml(t("manageMembers")) + '</button>' : '',
     canInviteMembers ? '<button class="quiet-button" type="button" data-action="open-invite">' + escapeHtml(t("inviteMember")) + '</button>' : '',
     canManage ? '<button class="pantry-primary" type="button" data-action="new-item">＋ ' + escapeHtml(t("addFood")) + '</button>' : '',
     '</div></section>',
     canManage ? '' : '<p class="permission-note">' + escapeHtml(t("permissionView")) + '</p>',
     '<div class="pantry-stat-grid" id="pantry-stats"></div>',
+    '<section class="analytics-grid" id="analytics-grid"><article class="pantry-panel analytics-card" id="personal-analytics"><div class="pantry-section-title"><h2>' + escapeHtml(t("personalAnalytics")) + '</h2><span class="muted-count">' + escapeHtml(t("analyticsPrivacy")) + '</span></div><div id="personal-analytics-content"></div></article>',
+    canViewHouseholdAnalytics ? '<article class="pantry-panel analytics-card" id="household-analytics"><div class="pantry-section-title"><h2>' + escapeHtml(t("householdAnalytics")) + '</h2></div><div id="household-analytics-content"></div></article>' : '',
+    '</section>',
     '<section class="pantry-panel"><div class="pantry-toolbar"><input class="pantry-search" id="pantry-search" type="search" placeholder="' + escapeHtml(t("search")) + '" aria-label="' + escapeHtml(t("search")) + '" />',
     '<select id="pantry-category-filter" aria-label="' + escapeHtml(t("category")) + '"></select><select id="pantry-location-filter" aria-label="' + escapeHtml(t("location")) + '"></select></div>',
     '<div class="pantry-section-title"><h2>' + escapeHtml(t("totalItems")) + '</h2><span id="pantry-item-count" class="muted-count"></span></div>',
@@ -211,6 +249,21 @@ export function mountPantry(config) {
     '<div id="invite-result" hidden><p class="invite-created-note">' + escapeHtml(t("invitationCreated")) + '</p><input class="field-input invite-link-field" id="invite-link" type="text" readonly aria-label="' + escapeHtml(t("inviteTitle")) + '" /><p class="invite-expiry-note">' + escapeHtml(t("inviteExpiry")) + '</p><p class="invite-expiry-note">' + escapeHtml(t("copyManually")) + '</p><button class="quiet-button" type="button" data-action="copy-invite">' + escapeHtml(t("copyLink")) + '</button></div>',
     '<details class="invite-test-tools"><summary>' + escapeHtml(t("confirmTestTitle")) + '</summary><p>' + escapeHtml(t("confirmTestExplain")) + '</p><label>' + escapeHtml(t("existingInvitedEmail")) + '<input class="field-input" id="confirm-test-email" type="email" autocomplete="email" maxlength="254" placeholder="friend@example.com" /></label><button class="quiet-button" type="button" data-action="confirm-test-account">' + escapeHtml(t("confirmTestButton")) + '</button><p class="inline-message" id="confirm-test-message" role="status" aria-live="polite" hidden></p></details>',
     '<div class="form-actions"><button type="button" class="quiet-button" data-action="close-invite">' + escapeHtml(t("close")) + '</button><button type="submit" class="pantry-primary" id="invite-submit">' + escapeHtml(t("createInvite")) + '</button></div></form></dialog>',
+    '<dialog id="members-dialog" class="stock-dialog members-dialog"><form method="dialog" class="dialog-close-row"><button class="icon-button" aria-label="' + escapeHtml(t("close")) + '">×</button></form>',
+    '<div class="members-dialog-content"><h3>' + escapeHtml(t("membersTitle")) + '</h3><p class="form-intro">' + escapeHtml(t("membersIntro")) + '</p>',
+    '<div id="members-empty" class="empty-hint" hidden>' + escapeHtml(t("noManageableMembers")) + '</div>',
+    '<div id="members-editor" hidden><label>' + escapeHtml(t("selectMember")) + '<select id="manage-member-select" class="field-input"></select></label>',
+    '<form id="member-permissions-form" class="member-permissions-form"><label>' + escapeHtml(t("roleLabel")) + '<select id="manage-member-role" class="field-input"><option value="member">' + escapeHtml(t("memberRole")) + '</option><option value="admin">' + escapeHtml(t("adminRole")) + '</option></select></label>',
+    '<p class="permission-section-title">' + escapeHtml(t("permissionsTitle")) + '</p><p class="member-admin-note" id="member-admin-note" hidden>' + escapeHtml(t("adminNote")) + '</p>',
+    '<div class="permission-toggle-list">',
+    '<label class="permission-toggle"><span>' + escapeHtml(t("permissionInventory")) + '</span><input type="checkbox" name="can_manage_inventory" /></label>',
+    '<label class="permission-toggle"><span>' + escapeHtml(t("permissionOwn")) + '</span><input type="checkbox" name="can_log_own_consumption" /></label>',
+    '<label class="permission-toggle"><span>' + escapeHtml(t("permissionOthers")) + '</span><input type="checkbox" name="can_log_others_consumption" /></label>',
+    '<label class="permission-toggle"><span>' + escapeHtml(t("permissionWaste")) + '</span><input type="checkbox" name="can_record_waste" /></label>',
+    '<label class="permission-toggle"><span>' + escapeHtml(t("permissionHouseholdAnalytics")) + '</span><input type="checkbox" name="can_view_household_analytics" /></label>',
+    '<label class="permission-toggle"><span>' + escapeHtml(t("permissionManageMembers")) + '</span><input type="checkbox" name="can_manage_members" /></label>',
+    '</div><p class="inline-message" id="member-permissions-message" role="status" aria-live="polite" hidden></p>',
+    '<div class="form-actions"><button type="button" class="quiet-button" data-action="close-members">' + escapeHtml(t("close")) + '</button><button type="submit" class="pantry-primary">' + escapeHtml(t("savePermissions")) + '</button></div></form></div></div></dialog>',
     '<div id="pantry-toast" class="pantry-toast" role="status" aria-live="polite" hidden></div></div>'
   ].join("");
 
@@ -336,6 +389,127 @@ export function mountPantry(config) {
     }).join("");
   }
 
+  function renderAnalytics() {
+    const personalGroups = {};
+    personalConsumption.forEach(function(row) {
+      const unit = row.base_unit;
+      personalGroups[unit] = (personalGroups[unit] || 0) + Math.abs(Number(row.quantity_delta));
+    });
+    const personalTotal = Object.keys(personalGroups).map(function(unit) {
+      const amount = displayQuantity(personalGroups[unit], unit, unit, currentLanguage);
+      return '<span class="analytics-amount">' + escapeHtml(amount) + '</span>';
+    }).join("");
+    $("#personal-analytics-content").innerHTML = personalConsumption.length
+      ? '<div class="analytics-metrics"><div class="analytics-metric"><strong>' + personalConsumption.length + '</strong><span>' + escapeHtml(t("personalRecords")) + '</span></div><div class="analytics-units">' + (personalTotal || "") + '</div></div>'
+      : '<p class="empty-hint">' + escapeHtml(t("noPersonalData")) + '</p>';
+
+    if (canViewHouseholdAnalytics) {
+      const consumption = householdMovements.filter(function(row) { return row.movement_type === "consumption"; });
+      const waste = householdMovements.filter(function(row) { return row.movement_type === "waste"; });
+      const wasteGroups = {};
+      waste.forEach(function(row) {
+        const unit = row.base_unit;
+        wasteGroups[unit] = (wasteGroups[unit] || 0) + Math.abs(Number(row.quantity_delta));
+      });
+      const wasteAmounts = Object.keys(wasteGroups).map(function(unit) {
+        return '<span class="analytics-amount">' + escapeHtml(displayQuantity(wasteGroups[unit],unit,unit,currentLanguage)) + '</span>';
+      }).join("");
+      $("#household-analytics-content").innerHTML = householdMovements.length
+        ? '<div class="analytics-metrics"><div class="analytics-metric"><strong>' + consumption.length + '</strong><span>' + escapeHtml(t("householdConsumption")) + '</span></div><div class="analytics-metric"><strong>' + waste.length + '</strong><span>' + escapeHtml(t("householdWaste")) + '</span></div></div><div class="analytics-units">' + (wasteAmounts || "") + '</div>'
+        : '<p class="empty-hint">' + escapeHtml(t("noHouseholdData")) + '</p>';
+    }
+  }
+
+  function manageableMembers() {
+    return members.filter(function(member) {
+      if (member.user_id === user.id || member.role === "owner") return false;
+      return isOwner || member.role === "member";
+    });
+  }
+
+  function memberDisplayName(member) {
+    const profile = householdPeople.find(function(person) { return person.id === member.user_id; });
+    return profile?.display_name || t("activityByMember");
+  }
+
+  function renderManagedMemberForm(memberId) {
+    const member = members.find(function(entry) { return entry.id === memberId; });
+    const formWrap = $("#members-editor");
+    if (!member) {
+      formWrap.hidden = true;
+      return;
+    }
+    formWrap.hidden = false;
+    $("#manage-member-role").value = member.role;
+    const form = $("#member-permissions-form");
+    [
+      "can_manage_inventory","can_log_own_consumption","can_log_others_consumption",
+      "can_record_waste","can_view_household_analytics","can_manage_members"
+    ].forEach(function(name) {
+      form.elements[name].checked = member[name] === true;
+    });
+    $("#member-admin-note").hidden = member.role !== "admin";
+    $("#member-permissions-message").hidden = true;
+  }
+
+  function renderManagedMembers() {
+    if (!canManageMembers) return;
+    const options = manageableMembers();
+    const empty = options.length === 0;
+    $("#members-empty").hidden = !empty;
+    $("#members-editor").hidden = empty;
+    if (empty) return;
+    $("#manage-member-select").innerHTML = options.map(function(member) {
+      return '<option value="' + escapeHtml(member.id) + '">' + escapeHtml(memberDisplayName(member)) + ' · ' + escapeHtml(t(member.role === "admin" ? "adminRole" : "memberRole")) + '</option>';
+    }).join("");
+    const chosen = options.find(function(member) { return member.id === selectedManagedMemberId; }) || options[0];
+    selectedManagedMemberId = chosen.id;
+    $("#manage-member-select").value = chosen.id;
+    renderManagedMemberForm(chosen.id);
+  }
+
+  function openMembersDialog() {
+    if (!canManageMembers) return;
+    selectedManagedMemberId = null;
+    renderManagedMembers();
+    $("#members-dialog").showModal();
+  }
+
+  async function saveManagedMember(event) {
+    event.preventDefault();
+    if (!canManageMembers || busy || !selectedManagedMemberId) return;
+    const member = members.find(function(entry) { return entry.id === selectedManagedMemberId; });
+    if (!member) return;
+    const form = event.currentTarget;
+    const role = $("#manage-member-role").value;
+    const saveButton = form.querySelector('[type="submit"]');
+    busy = true;
+    saveButton.disabled = true;
+    try {
+      const { error } = await supabase.rpc("update_household_member_permissions", {
+        p_member_id: member.id,
+        p_role: role,
+        p_can_manage_inventory: form.elements.can_manage_inventory.checked,
+        p_can_log_own_consumption: form.elements.can_log_own_consumption.checked,
+        p_can_log_others_consumption: form.elements.can_log_others_consumption.checked,
+        p_can_record_waste: form.elements.can_record_waste.checked,
+        p_can_view_household_analytics: form.elements.can_view_household_analytics.checked,
+        p_can_manage_members: form.elements.can_manage_members.checked
+      });
+      if (error) throw error;
+      toast(t(role !== member.role ? "roleUpdated" : "memberUpdated"));
+      await loadData();
+      renderManagedMembers();
+    } catch (error) {
+      $("#member-permissions-message").textContent = error.message || t("errorLoad");
+      $("#member-permissions-message").className = "inline-message error";
+      $("#member-permissions-message").hidden = false;
+    } finally {
+      busy = false;
+      saveButton.disabled = false;
+    }
+  }
+
   function renderAll() {
     $("#pantry-role").textContent = t(roleKey);
     renderFilters();
@@ -343,26 +517,39 @@ export function mountPantry(config) {
     renderStats();
     renderItems();
     renderActivity();
+    renderAnalytics();
     $("#location-details").hidden = !canManage;
   }
 
   async function loadData() {
     if (destroyed) return;
     $("#pantry-items").innerHTML = '<p class="loading-note">' + escapeHtml(t("loading")) + '</p>';
-    const results = await Promise.all([
+    const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
+    const baseQueries = [
       supabase.from("food_categories").select("key,label_en,label_hi,sort_order").order("sort_order"),
       supabase.from("storage_locations").select("id,name,sort_order").eq("household_id",household.id).eq("is_active",true).order("sort_order"),
       supabase.from("pantry_items").select("id,household_id,name,category_key,storage_location_id,quantity_base,base_unit,display_unit,expiry_date,alert_days_before,notes,created_at,archived_at").eq("household_id",household.id).is("archived_at",null).order("name"),
       supabase.from("inventory_movements").select("id,pantry_item_id,movement_type,quantity_delta,base_unit,actor_user_id,consumed_by_user_id,created_at").eq("household_id",household.id).order("created_at",{ascending:false}).limit(8),
-      supabase.from("household_members").select("user_id").eq("household_id",household.id)
-    ]);
+      supabase.from("household_members").select("id,user_id,role,can_manage_inventory,can_log_own_consumption,can_log_others_consumption,can_record_waste,can_view_household_analytics,can_manage_members,joined_at").eq("household_id",household.id),
+      supabase.from("inventory_movements").select("id,pantry_item_id,quantity_delta,base_unit,created_at").eq("household_id",household.id).eq("movement_type","consumption").eq("consumed_by_user_id",user.id).gte("created_at",monthStart).order("created_at",{ascending:false}).limit(1000)
+    ];
+    if (canViewHouseholdAnalytics) {
+      baseQueries.push(
+        supabase.from("inventory_movements").select("id,movement_type,quantity_delta,base_unit,created_at").eq("household_id",household.id).gte("created_at",monthStart).in("movement_type",["consumption","waste"]).limit(2000)
+      );
+    }
+    const results = await Promise.all(baseQueries);
     const error = results.map(function(result) { return result.error; }).find(Boolean);
     if (error) throw error;
     categories = results[0].data || [];
     locations = results[1].data || [];
     items = results[2].data || [];
     activities = results[3].data || [];
-    const memberIds = (results[4].data || []).map(function(member) { return member.user_id; });
+    members = results[4].data || [];
+    personalConsumption = results[5].data || [];
+    householdMovements = canViewHouseholdAnalytics ? (results[6].data || []) : [];
+
+    const memberIds = members.map(function(member) { return member.user_id; });
     if (memberIds.length) {
       const peopleResult = await supabase.from("profiles").select("id,display_name").in("id",memberIds);
       if (peopleResult.error) throw peopleResult.error;
@@ -719,6 +906,8 @@ export function mountPantry(config) {
     const id = button.dataset.id;
     if (action === "new-item") openItemForm(null);
     if (action === "open-invite") openInviteDialog();
+    if (action === "open-members") openMembersDialog();
+    if (action === "close-members") $("#members-dialog").close();
     if (action === "close-invite") $("#invite-dialog").close();
     if (action === "copy-invite") await copyInvitationLink();
     if (action === "confirm-test-account") await confirmInvitedTestAccount();
@@ -752,6 +941,17 @@ export function mountPantry(config) {
   $("#stock-form").addEventListener("submit",saveStock,{signal:abortController.signal});
   $("#log-form").addEventListener("submit",saveConsumptionOrWaste,{signal:abortController.signal});
   $("#invite-form").addEventListener("submit",createInvitation,{signal:abortController.signal});
+  $("#member-permissions-form").addEventListener("submit",saveManagedMember,{signal:abortController.signal});
+  $("#manage-member-select").addEventListener("change",function(event) {
+    selectedManagedMemberId = event.target.value;
+    renderManagedMemberForm(selectedManagedMemberId);
+  },{signal:abortController.signal});
+  $("#manage-member-role").addEventListener("change",function(event) {
+    const makeAdmin = event.target.value === "admin";
+    ["can_manage_inventory","can_log_own_consumption","can_log_others_consumption","can_record_waste","can_view_household_analytics","can_manage_members"]
+      .forEach(function(name) { $("#member-permissions-form").elements[name].checked = makeAdmin; });
+    $("#member-admin-note").hidden = !makeAdmin;
+  },{signal:abortController.signal});
   $("#pantry-search").addEventListener("input",function(event) { searchTerm = event.target.value.trim(); renderItems(); },{signal:abortController.signal});
   $("#pantry-category-filter").addEventListener("change",function(event) { activeCategory = event.target.value; renderItems(); },{signal:abortController.signal});
   $("#pantry-location-filter").addEventListener("change",function(event) { activeLocation = event.target.value; renderItems(); },{signal:abortController.signal});
