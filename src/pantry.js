@@ -28,6 +28,11 @@ const EN = {
   categoryRequired:"Choose a category.", locationRequired:"Enter a location name.",
   itemNamePlaceholder:"e.g. Milk", locationPlaceholder:"e.g. Refrigerator",
   activityByYou:"You", activityByMember:"Household member",
+  used:"Used", recordWaste:"Record waste", logConsumption:"Record consumption",
+  consumedBy:"Who consumed it?", sharedConsumption:"Shared household consumption",
+  wasteReason:"Reason (optional)", expiredReason:"Expired", spoiledReason:"Spoiled before expiry",
+  overPreparedReason:"Over-prepared", otherReason:"Other",
+  consumptionSaved:"Consumption recorded.", wasteSaved:"Food waste recorded.",
   kg:"kg", g:"g", L:"L", ml:"ml", pcs:"pieces", pack:"packs", unit:"units"
 };
 
@@ -61,6 +66,11 @@ const HI = {
   categoryRequired:"श्रेणी चुनें।", locationRequired:"स्थान का नाम लिखें।",
   itemNamePlaceholder:"जैसे दूध", locationPlaceholder:"जैसे फ्रिज",
   activityByYou:"आप", activityByMember:"परिवार का सदस्य",
+  used:"इस्तेमाल", recordWaste:"बर्बादी दर्ज करें", logConsumption:"इस्तेमाल दर्ज करें",
+  consumedBy:"किसने इस्तेमाल किया?", sharedConsumption:"परिवार का साझा इस्तेमाल",
+  wasteReason:"कारण (वैकल्पिक)", expiredReason:"समाप्त हो गया", spoiledReason:"समाप्ति से पहले खराब",
+  overPreparedReason:"ज़रूरत से ज़्यादा बनाया", otherReason:"अन्य",
+  consumptionSaved:"इस्तेमाल दर्ज हो गया।", wasteSaved:"खाने की बर्बादी दर्ज हो गई।",
   kg:"किलो", g:"ग्राम", L:"लीटर", ml:"मिलीलीटर", pcs:"नग", pack:"पैक", unit:"इकाई"
 };
 
@@ -105,15 +115,22 @@ export function mountPantry(config) {
   let categories = [];
   let locations = [];
   let activities = [];
+  let householdPeople = [];
   let editingItem = null;
   let selectedStockItem = null;
+  let selectedLogItem = null;
+  let selectedLogType = null;
   let activeCategory = "all";
   let activeLocation = "all";
   let searchTerm = "";
   let busy = false;
   let destroyed = false;
   const abortController = new AbortController();
-  const canManage = membership.role === "owner" || membership.can_manage_inventory === true;
+  const isOwner = membership.role === "owner";
+  const canManage = isOwner || membership.can_manage_inventory === true;
+  const canLogOwn = isOwner || membership.can_log_own_consumption === true;
+  const canLogOthers = isOwner || membership.can_log_others_consumption === true;
+  const canRecordWaste = isOwner || membership.can_record_waste === true;
   const roleKey = membership.role === "owner" ? "roleOwner" : membership.role === "admin" ? "roleAdmin" : "roleMember";
   const t = function(key) { return (currentLanguage === "hi" ? HI[key] : EN[key]) || EN[key] || key; };
 
@@ -149,6 +166,12 @@ export function mountPantry(config) {
     '<form id="stock-form" class="stock-form"><h3>' + escapeHtml(t("restockTitle")) + '</h3><p id="stock-item-label" class="form-intro"></p>',
     '<label>' + escapeHtml(t("amountToAdd")) + '<div class="quantity-fields"><input class="field-input" name="quantity" id="stock-quantity" type="number" min="0.001" step="0.001" required /><span id="stock-unit" class="unit-label"></span></div></label>',
     '<p class="inline-message" id="stock-message" role="status" aria-live="polite" hidden></p><div class="form-actions"><button type="button" class="quiet-button" data-action="close-stock">' + escapeHtml(t("cancel")) + '</button><button type="submit" class="pantry-primary">' + escapeHtml(t("addStock")) + '</button></div></form></dialog>',
+    '<dialog id="log-dialog" class="stock-dialog"><form method="dialog" class="dialog-close-row"><button class="icon-button" aria-label="' + escapeHtml(t("close")) + '">×</button></form>',
+    '<form id="log-form" class="stock-form"><h3 id="log-title"></h3><p id="log-item-label" class="form-intro"></p>',
+    '<label>' + escapeHtml(t("quantity")) + '<div class="quantity-fields"><input class="field-input" name="quantity" id="log-quantity" type="number" min="0.001" step="0.001" required /><span id="log-unit" class="unit-label"></span></div></label>',
+    '<label id="log-consumer-wrap">' + escapeHtml(t("consumedBy")) + '<select class="field-input" id="log-consumer" name="consumed_by_user_id"></select></label>',
+    '<label id="log-reason-wrap">' + escapeHtml(t("wasteReason")) + '<select class="field-input" id="log-reason" name="reason"><option value="">' + escapeHtml(t("none")) + '</option><option value="expired">' + escapeHtml(t("expiredReason")) + '</option><option value="spoiled">' + escapeHtml(t("spoiledReason")) + '</option><option value="over_prepared">' + escapeHtml(t("overPreparedReason")) + '</option><option value="other">' + escapeHtml(t("otherReason")) + '</option></select></label>',
+    '<p class="inline-message" id="log-message" role="status" aria-live="polite" hidden></p><div class="form-actions"><button type="button" class="quiet-button" data-action="close-log">' + escapeHtml(t("cancel")) + '</button><button type="submit" class="pantry-primary" id="log-submit"></button></div></form></dialog>',
     '<div id="pantry-toast" class="pantry-toast" role="status" aria-live="polite" hidden></div></div>'
   ].join("");
 
@@ -227,7 +250,15 @@ export function mountPantry(config) {
       const loc = locations.find(function(l) { return l.id === item.storage_location_id; });
       const amount = displayQuantity(Number(item.quantity_base), item.base_unit, item.display_unit, currentLanguage);
       const expiry = item.expiry_date ? new Date(item.expiry_date + "T00:00:00").toLocaleDateString(currentLanguage === "hi" ? "hi-IN" : "en-IN", {day:"numeric",month:"short",year:"numeric"}) : "";
-      const actions = canManage ? '<div class="food-actions"><button class="mini-button" type="button" data-action="edit-item" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(t("edit")) + '</button><button class="mini-button" type="button" data-action="restock-item" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(t("restock")) + '</button><button class="mini-button danger-button" type="button" data-action="archive-item" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(t("archive")) + '</button></div>' : "";
+      const actionButtons = [];
+      if (canLogOwn || canLogOthers) actionButtons.push('<button class="mini-button" type="button" data-action="log-consumption" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(t("used")) + '</button>');
+      if (canRecordWaste) actionButtons.push('<button class="mini-button danger-button" type="button" data-action="log-waste" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(t("recordWaste")) + '</button>');
+      if (canManage) {
+        actionButtons.push('<button class="mini-button" type="button" data-action="edit-item" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(t("edit")) + '</button>');
+        actionButtons.push('<button class="mini-button" type="button" data-action="restock-item" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(t("restock")) + '</button>');
+        actionButtons.push('<button class="mini-button danger-button" type="button" data-action="archive-item" data-id="' + escapeHtml(item.id) + '">' + escapeHtml(t("archive")) + '</button>');
+      }
+      const actions = actionButtons.length ? '<div class="food-actions">' + actionButtons.join("") + '</div>' : "";
       return '<article class="food-card"><div class="food-card-top"><span class="food-category-label">' +
         escapeHtml(cat ? (currentLanguage === "hi" ? cat.label_hi : cat.label_en) : item.category_key) + '</span>' +
         dateStatus(item.expiry_date, t) + '</div><h3>' + escapeHtml(item.name) + '</h3><div class="food-quantity">' +
@@ -250,12 +281,17 @@ export function mountPantry(config) {
     $("#pantry-activity").innerHTML = activities.map(function(activity) {
       const item = items.find(function(entry) { return entry.id === activity.pantry_item_id; });
       const amount = displayQuantity(Math.abs(Number(activity.quantity_delta)), activity.base_unit, activity.base_unit, currentLanguage);
-      const actor = activity.actor_user_id === user.id ? t("activityByYou") : t("activityByMember");
+      const actorProfile = householdPeople.find(function(person) { return person.id === activity.actor_user_id; });
+      const consumerProfile = householdPeople.find(function(person) { return person.id === activity.consumed_by_user_id; });
+      const actor = activity.actor_user_id === user.id ? t("activityByYou") : (actorProfile?.display_name || t("activityByMember"));
+      const consumedBy = activity.movement_type === "consumption" && activity.consumed_by_user_id
+        ? " · " + (consumerProfile?.display_name || t("activityByMember"))
+        : "";
       const date = new Date(activity.created_at).toLocaleString(currentLanguage === "hi" ? "hi-IN" : "en-IN", {day:"numeric",month:"short",hour:"numeric",minute:"2-digit"});
       const canUndo = activity.movement_type !== "reversal" && (activity.actor_user_id === user.id || canManage);
       return '<div class="activity-row"><div class="activity-dot ' + escapeHtml(activity.movement_type) + '"></div><div class="activity-content"><strong>' +
         escapeHtml(item ? item.name : "Food item") + '</strong><span>' + escapeHtml(movementLabel(activity.movement_type)) + ' · ' +
-        escapeHtml(amount) + ' · ' + escapeHtml(actor) + '</span><small>' + escapeHtml(date) + '</small></div>' +
+        escapeHtml(amount) + ' · ' + escapeHtml(actor + consumedBy) + '</span><small>' + escapeHtml(date) + '</small></div>' +
         (canUndo ? '<button type="button" class="mini-button" data-action="undo-movement" data-id="' + escapeHtml(activity.id) + '">' + escapeHtml(t("reversal")) + '</button>' : '') +
         '</div>';
     }).join("");
@@ -278,7 +314,8 @@ export function mountPantry(config) {
       supabase.from("food_categories").select("key,label_en,label_hi,sort_order").order("sort_order"),
       supabase.from("storage_locations").select("id,name,sort_order").eq("household_id",household.id).eq("is_active",true).order("sort_order"),
       supabase.from("pantry_items").select("id,household_id,name,category_key,storage_location_id,quantity_base,base_unit,display_unit,expiry_date,alert_days_before,notes,created_at,archived_at").eq("household_id",household.id).is("archived_at",null).order("name"),
-      supabase.from("inventory_movements").select("id,pantry_item_id,movement_type,quantity_delta,base_unit,actor_user_id,created_at").eq("household_id",household.id).order("created_at",{ascending:false}).limit(8)
+      supabase.from("inventory_movements").select("id,pantry_item_id,movement_type,quantity_delta,base_unit,actor_user_id,consumed_by_user_id,created_at").eq("household_id",household.id).order("created_at",{ascending:false}).limit(8),
+      supabase.from("household_members").select("user_id").eq("household_id",household.id)
     ]);
     const error = results.map(function(result) { return result.error; }).find(Boolean);
     if (error) throw error;
@@ -286,6 +323,14 @@ export function mountPantry(config) {
     locations = results[1].data || [];
     items = results[2].data || [];
     activities = results[3].data || [];
+    const memberIds = (results[4].data || []).map(function(member) { return member.user_id; });
+    if (memberIds.length) {
+      const peopleResult = await supabase.from("profiles").select("id,display_name").in("id",memberIds);
+      if (peopleResult.error) throw peopleResult.error;
+      householdPeople = peopleResult.data || [];
+    } else {
+      householdPeople = [];
+    }
     renderAll();
   }
 
@@ -421,6 +466,76 @@ export function mountPantry(config) {
     }
   }
 
+  function openLogDialog(item, type) {
+    selectedLogItem = item;
+    selectedLogType = type;
+    const isConsumption = type === "consumption";
+    $("#log-title").textContent = t(isConsumption ? "logConsumption" : "recordWaste");
+    $("#log-item-label").textContent = item.name + " · " + t("quantity");
+    $("#log-unit").textContent = t(item.display_unit);
+    $("#log-quantity").value = "";
+    $("#log-message").hidden = true;
+    $("#log-consumer-wrap").hidden = !isConsumption || !canLogOthers;
+    $("#log-reason-wrap").hidden = isConsumption;
+    $("#log-submit").textContent = t(isConsumption ? "logConsumption" : "recordWaste");
+    if (isConsumption && canLogOthers) {
+      $("#log-consumer").innerHTML =
+        '<option value="">' + escapeHtml(t("sharedConsumption")) + '</option>' +
+        householdPeople.map(function(person) {
+          return '<option value="' + escapeHtml(person.id) + '">' + escapeHtml(person.display_name || t("activityByMember")) + '</option>';
+        }).join("");
+      $("#log-consumer").value = user.id;
+    } else {
+      $("#log-consumer").innerHTML = '<option value="' + escapeHtml(user.id) + '">' + escapeHtml(t("activityByYou")) + '</option>';
+    }
+    $("#log-reason").value = "";
+    $("#log-dialog").showModal();
+    $("#log-quantity").focus();
+  }
+
+  async function saveConsumptionOrWaste(event) {
+    event.preventDefault();
+    if (!selectedLogItem || !selectedLogType || busy) return;
+    const values = new FormData(event.currentTarget);
+    const quantity = Number(values.get("quantity"));
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      $("#log-message").textContent = t("stockRequired");
+      $("#log-message").hidden = false;
+      return;
+    }
+    busy = true;
+    const button = event.currentTarget.querySelector('[type="submit"]');
+    button.disabled = true;
+    try {
+      const amountBase = toBaseQuantity(quantity, selectedLogItem.display_unit);
+      let result;
+      if (selectedLogType === "consumption") {
+        const selectedConsumer = canLogOthers ? (String(values.get("consumed_by_user_id") || "") || null) : user.id;
+        result = await supabase.rpc("record_consumption", {
+          p_pantry_item_id:selectedLogItem.id,
+          p_quantity_base:amountBase,
+          p_consumed_by_user_id:selectedConsumer
+        });
+      } else {
+        result = await supabase.rpc("record_food_waste", {
+          p_pantry_item_id:selectedLogItem.id,
+          p_quantity_base:amountBase,
+          p_reason:String(values.get("reason") || "") || null
+        });
+      }
+      if (result.error) throw result.error;
+      $("#log-dialog").close();
+      toast(t(selectedLogType === "consumption" ? "consumptionSaved" : "wasteSaved"));
+      await loadData();
+    } catch (error) {
+      $("#log-message").textContent = error.message || t("errorLoad");
+      $("#log-message").hidden = false;
+    } finally {
+      busy = false;
+      button.disabled = false;
+    }
+  }
+
   async function archiveItem(id) {
     if (!canManage || busy || !window.confirm(t("confirmArchive"))) return;
     busy = true;
@@ -463,6 +578,15 @@ export function mountPantry(config) {
       const item = items.find(function(entry) { return entry.id === id; });
       if (item) openStockDialog(item);
     }
+    if (action === "log-consumption") {
+      const item = items.find(function(entry) { return entry.id === id; });
+      if (item) openLogDialog(item,"consumption");
+    }
+    if (action === "log-waste") {
+      const item = items.find(function(entry) { return entry.id === id; });
+      if (item) openLogDialog(item,"waste");
+    }
+    if (action === "close-log") $("#log-dialog").close();
     if (action === "close-stock") $("#stock-dialog").close();
     if (action === "archive-item") await archiveItem(id);
     if (action === "undo-movement") await undoMovement(id);
@@ -476,6 +600,7 @@ export function mountPantry(config) {
   $("#pantry-item-form").addEventListener("submit",saveItem,{signal:abortController.signal});
   $("#location-form").addEventListener("submit",saveLocation,{signal:abortController.signal});
   $("#stock-form").addEventListener("submit",saveStock,{signal:abortController.signal});
+  $("#log-form").addEventListener("submit",saveConsumptionOrWaste,{signal:abortController.signal});
   $("#pantry-search").addEventListener("input",function(event) { searchTerm = event.target.value.trim(); renderItems(); },{signal:abortController.signal});
   $("#pantry-category-filter").addEventListener("change",function(event) { activeCategory = event.target.value; renderItems(); },{signal:abortController.signal});
   $("#pantry-location-filter").addEventListener("change",function(event) { activeLocation = event.target.value; renderItems(); },{signal:abortController.signal});
