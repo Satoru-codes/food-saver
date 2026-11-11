@@ -930,8 +930,9 @@ export function mountPantry(config) {
     if (action === "archive-item") await archiveItem(id);
     if (action === "undo-movement") await undoMovement(id);
     if (action === "refresh") {
-      try { await loadData(); toast(t("refresh")); }
-      catch (error) { toast(error.message || t("errorLoad"),"error"); }
+      // A full reload re-fetches the signed-in member's role and permission
+      // flags in main.js, not only the pantry data in this module.
+      window.location.reload();
     }
     if (action === "signout") await onSignOut();
   }, {signal:abortController.signal});
