@@ -118,6 +118,8 @@ let currentUser = null;
 let isSubmitting = false;
 let pantryController = null;
 let activeHouseholdId = null;
+let activeHousehold = null;
+let activeMembership = null;
 
 function t(key) {
   return text[language]?.[key] ?? text.en[key] ?? key;
@@ -165,6 +167,8 @@ function showAuthPanel(panel) {
     pantryController.destroy();
     pantryController = null;
     activeHouseholdId = null;
+    activeHousehold = null;
+    activeMembership = null;
   }
   $("#auth-hero").hidden = false;
   $("#workspace-view").hidden = true;
@@ -207,6 +211,8 @@ async function loadHouseholds() {
       pantryController.destroy();
       pantryController = null;
       activeHouseholdId = null;
+      activeHousehold = null;
+      activeMembership = null;
     }
     $("#auth-hero").hidden = false;
     $("#workspace-view").hidden = true;
@@ -235,6 +241,8 @@ async function loadHouseholds() {
   $("#household-card").hidden = true;
   $("#workspace-card").hidden = true;
 
+  activeHousehold = household;
+  activeMembership = membership;
   if (activeHouseholdId !== household.id || !pantryController) {
     if (pantryController) pantryController.destroy();
     activeHouseholdId = household.id;
@@ -258,6 +266,8 @@ async function syncSession(session) {
       pantryController.destroy();
       pantryController = null;
       activeHouseholdId = null;
+      activeHousehold = null;
+      activeMembership = null;
     }
     $("#auth-hero").hidden = false;
     $("#workspace-view").hidden = true;
@@ -300,7 +310,18 @@ $("#language-select").addEventListener("change", async (event) => {
   language = event.target.value === "hi" ? "hi" : "en";
   localStorage.setItem("foodsaver_language", language);
   applyLanguage();
-  if (pantryController) pantryController.setLanguage(language);
+  if (pantryController && activeHousehold && activeMembership) {
+    pantryController.destroy();
+    pantryController = mountPantry({
+      supabase,
+      container: $("#pantry-root"),
+      household: activeHousehold,
+      membership: activeMembership,
+      user: currentUser,
+      language,
+      onSignOut: signOut
+    });
+  }
   await updateProfileLanguage(language);
 });
 
