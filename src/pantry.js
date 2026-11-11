@@ -33,6 +33,15 @@ const EN = {
   wasteReason:"Reason (optional)", expiredReason:"Expired", spoiledReason:"Spoiled before expiry",
   overPreparedReason:"Over-prepared", otherReason:"Other",
   consumptionSaved:"Consumption recorded.", wasteSaved:"Food waste recorded.",
+  inviteMember:"Invite member", inviteTitle:"Invite someone to your household",
+  inviteIntro:"They must create an account or sign in with the email address you invite.",
+  inviteEmail:"Friend's email address", createInvite:"Create invite link",
+  invitationCreated:"Invitation link created. Share it with your friend.",
+  copyLink:"Copy invite link", copied:"Invite link copied.",
+  copyManually:"Copy the link below and send it privately.",
+  inviteExpiry:"This link expires in 7 days and can only be used once by the invited email address.",
+  inviteError:"Could not create the invitation. Check your permission and try again.",
+  close:"Close",
   kg:"kg", g:"g", L:"L", ml:"ml", pcs:"pieces", pack:"packs", unit:"units"
 };
 
@@ -71,6 +80,15 @@ const HI = {
   wasteReason:"कारण (वैकल्पिक)", expiredReason:"समाप्त हो गया", spoiledReason:"समाप्ति से पहले खराब",
   overPreparedReason:"ज़रूरत से ज़्यादा बनाया", otherReason:"अन्य",
   consumptionSaved:"इस्तेमाल दर्ज हो गया।", wasteSaved:"खाने की बर्बादी दर्ज हो गई।",
+  inviteMember:"सदस्य को आमंत्रित करें", inviteTitle:"परिवार में किसी को आमंत्रित करें",
+  inviteIntro:"आमंत्रित ईमेल पते से उन्हें खाता बनाना या साइन इन करना होगा।",
+  inviteEmail:"मित्र का ईमेल पता", createInvite:"आमंत्रण लिंक बनाएँ",
+  invitationCreated:"आमंत्रण लिंक बन गया। इसे अपने मित्र के साथ साझा करें।",
+  copyLink:"लिंक कॉपी करें", copied:"आमंत्रण लिंक कॉपी हो गया।",
+  copyManually:"नीचे दिए गए लिंक को कॉपी करके निजी रूप से भेजें।",
+  inviteExpiry:"यह लिंक 7 दिनों में समाप्त होगा और आमंत्रित ईमेल से केवल एक बार उपयोग किया जा सकता है।",
+  inviteError:"आमंत्रण नहीं बन सका। अनुमति जाँचकर फिर कोशिश करें।",
+  close:"बंद करें",
   kg:"किलो", g:"ग्राम", L:"लीटर", ml:"मिलीलीटर", pcs:"नग", pack:"पैक", unit:"इकाई"
 };
 
@@ -131,6 +149,7 @@ export function mountPantry(config) {
   const canLogOwn = isOwner || membership.can_log_own_consumption === true;
   const canLogOthers = isOwner || membership.can_log_others_consumption === true;
   const canRecordWaste = isOwner || membership.can_record_waste === true;
+  const canInviteMembers = isOwner || membership.can_manage_members === true;
   const roleKey = membership.role === "owner" ? "roleOwner" : membership.role === "admin" ? "roleAdmin" : "roleMember";
   const t = function(key) { return (currentLanguage === "hi" ? HI[key] : EN[key]) || EN[key] || key; };
 
@@ -138,6 +157,7 @@ export function mountPantry(config) {
     '<div class="pantry-app">',
     '<section class="pantry-heading"><div><p class="eyebrow">' + escapeHtml(household.name) + '</p><h1>' + escapeHtml(t("pantry")) + '</h1><p class="pantry-subtitle">' + escapeHtml(t("subtitle")) + '</p></div>',
     '<div class="pantry-heading-actions"><span class="role-chip" id="pantry-role"></span><button class="quiet-button" type="button" data-action="refresh">' + escapeHtml(t("refresh")) + '</button><button class="quiet-button" type="button" data-action="signout">' + escapeHtml(t("signOut")) + '</button>',
+    canInviteMembers ? '<button class="quiet-button" type="button" data-action="open-invite">' + escapeHtml(t("inviteMember")) + '</button>' : '',
     canManage ? '<button class="pantry-primary" type="button" data-action="new-item">＋ ' + escapeHtml(t("addFood")) + '</button>' : '',
     '</div></section>',
     canManage ? '' : '<p class="permission-note">' + escapeHtml(t("permissionView")) + '</p>',
@@ -172,6 +192,12 @@ export function mountPantry(config) {
     '<label id="log-consumer-wrap">' + escapeHtml(t("consumedBy")) + '<select class="field-input" id="log-consumer" name="consumed_by_user_id"></select></label>',
     '<label id="log-reason-wrap">' + escapeHtml(t("wasteReason")) + '<select class="field-input" id="log-reason" name="reason"><option value="">' + escapeHtml(t("none")) + '</option><option value="expired">' + escapeHtml(t("expiredReason")) + '</option><option value="spoiled">' + escapeHtml(t("spoiledReason")) + '</option><option value="over_prepared">' + escapeHtml(t("overPreparedReason")) + '</option><option value="other">' + escapeHtml(t("otherReason")) + '</option></select></label>',
     '<p class="inline-message" id="log-message" role="status" aria-live="polite" hidden></p><div class="form-actions"><button type="button" class="quiet-button" data-action="close-log">' + escapeHtml(t("cancel")) + '</button><button type="submit" class="pantry-primary" id="log-submit"></button></div></form></dialog>',
+    '<dialog id="invite-dialog" class="stock-dialog invite-dialog"><form method="dialog" class="dialog-close-row"><button class="icon-button" aria-label="' + escapeHtml(t("close")) + '">×</button></form>',
+    '<form id="invite-form" class="stock-form"><h3>' + escapeHtml(t("inviteTitle")) + '</h3><p class="form-intro">' + escapeHtml(t("inviteIntro")) + '</p>',
+    '<label>' + escapeHtml(t("inviteEmail")) + '<input class="field-input" id="invite-email" name="email" type="email" autocomplete="email" maxlength="254" required placeholder="friend@example.com" /></label>',
+    '<p class="inline-message" id="invite-message" role="status" aria-live="polite" hidden></p>',
+    '<div id="invite-result" hidden><p class="invite-created-note">' + escapeHtml(t("invitationCreated")) + '</p><input class="field-input invite-link-field" id="invite-link" type="text" readonly aria-label="' + escapeHtml(t("inviteTitle")) + '" /><p class="invite-expiry-note">' + escapeHtml(t("inviteExpiry")) + '</p><p class="invite-expiry-note">' + escapeHtml(t("copyManually")) + '</p><button class="quiet-button" type="button" data-action="copy-invite">' + escapeHtml(t("copyLink")) + '</button></div>',
+    '<div class="form-actions"><button type="button" class="quiet-button" data-action="close-invite">' + escapeHtml(t("close")) + '</button><button type="submit" class="pantry-primary" id="invite-submit">' + escapeHtml(t("createInvite")) + '</button></div></form></dialog>',
     '<div id="pantry-toast" class="pantry-toast" role="status" aria-live="polite" hidden></div></div>'
   ].join("");
 
@@ -466,6 +492,76 @@ export function mountPantry(config) {
     }
   }
 
+  function openInviteDialog() {
+    $("#invite-form").reset();
+    $("#invite-message").hidden = true;
+    $("#invite-result").hidden = true;
+    $("#invite-submit").hidden = false;
+    $("#invite-email").disabled = false;
+    $("#invite-dialog").showModal();
+    $("#invite-email").focus();
+  }
+
+  function createSecureToken() {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, function(byte) { return byte.toString(16).padStart(2, "0"); }).join("");
+  }
+
+  async function sha256Hex(value) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+    return Array.from(new Uint8Array(digest), function(byte) { return byte.toString(16).padStart(2, "0"); }).join("");
+  }
+
+  async function createInvitation(event) {
+    event.preventDefault();
+    if (!canInviteMembers || busy) return;
+    const email = String(new FormData(event.currentTarget).get("email") || "").trim().toLowerCase();
+    if (!email) return;
+    busy = true;
+    const submit = $("#invite-submit");
+    submit.disabled = true;
+    $("#invite-message").hidden = true;
+    $("#invite-result").hidden = true;
+    try {
+      const token = createSecureToken();
+      const tokenHash = await sha256Hex(token);
+      const { error } = await supabase.rpc("create_household_invitation", {
+        p_household_id: household.id,
+        p_email: email,
+        p_token_hash: tokenHash
+      });
+      if (error) throw error;
+      const link = new URL(window.location.origin + window.location.pathname);
+      link.searchParams.set("invite", token);
+      $("#invite-link").value = link.toString();
+      $("#invite-result").hidden = false;
+      $("#invite-email").disabled = true;
+      submit.hidden = true;
+      toast(t("invitationCreated"));
+    } catch (error) {
+      $("#invite-message").textContent = error.message || t("inviteError");
+      $("#invite-message").className = "inline-message error";
+      $("#invite-message").hidden = false;
+    } finally {
+      busy = false;
+      submit.disabled = false;
+    }
+  }
+
+  async function copyInvitationLink() {
+    const field = $("#invite-link");
+    if (!field.value) return;
+    try {
+      await navigator.clipboard.writeText(field.value);
+      toast(t("copied"));
+    } catch (error) {
+      field.focus();
+      field.select();
+      toast(t("copyManually"), "error");
+    }
+  }
+
   function openLogDialog(item, type) {
     selectedLogItem = item;
     selectedLogType = type;
@@ -572,6 +668,9 @@ export function mountPantry(config) {
     const action = button.dataset.action;
     const id = button.dataset.id;
     if (action === "new-item") openItemForm(null);
+    if (action === "open-invite") openInviteDialog();
+    if (action === "close-invite") $("#invite-dialog").close();
+    if (action === "copy-invite") await copyInvitationLink();
     if (action === "edit-item") openItemForm(items.find(function(item) { return item.id === id; }));
     if (action === "close-item-form") { $("#pantry-item-form-wrap").hidden = true; editingItem = null; }
     if (action === "restock-item") {
@@ -601,6 +700,7 @@ export function mountPantry(config) {
   $("#location-form").addEventListener("submit",saveLocation,{signal:abortController.signal});
   $("#stock-form").addEventListener("submit",saveStock,{signal:abortController.signal});
   $("#log-form").addEventListener("submit",saveConsumptionOrWaste,{signal:abortController.signal});
+  $("#invite-form").addEventListener("submit",createInvitation,{signal:abortController.signal});
   $("#pantry-search").addEventListener("input",function(event) { searchTerm = event.target.value.trim(); renderItems(); },{signal:abortController.signal});
   $("#pantry-category-filter").addEventListener("change",function(event) { activeCategory = event.target.value; renderItems(); },{signal:abortController.signal});
   $("#pantry-location-filter").addEventListener("change",function(event) { activeLocation = event.target.value; renderItems(); },{signal:abortController.signal});
