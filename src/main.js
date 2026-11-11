@@ -57,6 +57,10 @@ const text = {
     genericError: "Something went wrong. Please try again.",
     noHouseholds: "No household is linked to this account yet.",
     inviteNotice: "You've been invited to a FoodSaver household. Create an account or sign in using the exact email address that received the invitation.",
+    resendConfirmation: "Resend confirmation email",
+    confirmationResent: "A new confirmation email has been requested. Open the newest email and use its Confirm email address link.",
+    confirmationVerified: "Email confirmed. Your account is now ready.",
+    confirmationFailed: "We couldn't verify that confirmation link. Request a new confirmation email and use the newest link.",
     selectHousehold: "Your households"
   },
   hi: {
@@ -111,6 +115,10 @@ const text = {
     genericError: "कुछ गड़बड़ हुई। कृपया फिर कोशिश करें।",
     noHouseholds: "इस खाते से अभी कोई परिवार जुड़ा नहीं है।",
     inviteNotice: "आपको FoodSaver परिवार में आमंत्रित किया गया है। आमंत्रण पाने वाले उसी ईमेल पते से खाता बनाएँ या साइन इन करें।",
+    resendConfirmation: "पुष्टि ईमेल दोबारा भेजें",
+    confirmationResent: "नया पुष्टि ईमेल भेजने का अनुरोध किया गया है। सबसे नया ईमेल खोलकर पुष्टि लिंक इस्तेमाल करें।",
+    confirmationVerified: "ईमेल की पुष्टि हो गई है। आपका खाता तैयार है।",
+    confirmationFailed: "इस पुष्टि लिंक से ईमेल सत्यापित नहीं हो सका। नया पुष्टि ईमेल मँगाएँ और सबसे नया लिंक खोलें।",
     selectHousehold: "आपके परिवार"
   }
 };
@@ -193,7 +201,9 @@ function showAuthPanel(panel) {
 
 function getAuthRedirectUrl() {
   const redirectUrl = new URL(window.location.origin + window.location.pathname);
-  if (pendingInviteToken) redirectUrl.searchParams.set("invite", pendingInviteToken);
+  // Always include this query parameter so the custom confirmation email can
+  // safely append token_hash and type after the RedirectTo URL.
+  redirectUrl.searchParams.set("invite", pendingInviteToken || "");
   return redirectUrl.toString();
 }
 
@@ -227,7 +237,7 @@ function friendlyError(error) {
   if (/invalid login credentials/i.test(message)) return "Email or password is incorrect.";
   if (/user already registered/i.test(message)) return "An account with this email already exists. Sign in instead.";
   if (/password should be at least/i.test(message)) return "Choose a password with at least 8 characters.";
-  if (/email not confirmed/i.test(message)) return "Please confirm your email address before signing in.";
+  if (/email not confirmed/i.test(message)) return "Please confirm your email address before signing in. You can request a fresh confirmation email below.";
   if (/rate limit/i.test(message)) return "Too many attempts. Please wait a little and try again.";
   if (/failed to fetch|network/i.test(message)) return "Could not reach Supabase. Check your connection and project settings.";
   return message || t("genericError");
@@ -374,6 +384,30 @@ $("#language-select").addEventListener("change", async (event) => {
 
 $("#tab-signin").addEventListener("click", () => showAuthPanel("signin"));
 $("#tab-signup").addEventListener("click", () => showAuthPanel("signup"));
+$("#resend-confirmation").addEventListener("click", async () => {
+  const email = String($("#signin-email").value || "").trim();
+  if (!email) {
+    showStatus("Enter the email address first, then request a new confirmation email.", "error");
+    $("#signin-email").focus();
+    return;
+  }
+  const button = $("#resend-confirmation");
+  button.disabled = true;
+  try {
+    const { error } = await supabase.auth.resend({
+      type: "signup",
+      email,
+      options: { emailRedirectTo: getAuthRedirectUrl() }
+    });
+    if (error) throw error;
+    showStatus(t("confirmationResent"), "success");
+  } catch (error) {
+    showStatus(friendlyError(error), "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+
 $("#show-reset").addEventListener("click", () => showAuthPanel("reset"));
 $("#back-to-signin").addEventListener("click", () => showAuthPanel("signin"));
 
@@ -391,9 +425,11 @@ $("#signin-form").addEventListener("submit", async (event) => {
   try {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
+    $("#resend-confirmation").hidden = true;
     await syncSession(data.session);
   } catch (error) {
     showStatus(friendlyError(error), "error");
+    $("#resend-confirmation").hidden = !/email not confirmed/i.test(String(error?.message || ""));
   } finally {
     isSubmitting = false;
     setBusy(form, false);
@@ -537,6 +573,37 @@ if (!isSupabaseConfigured) {
       void syncSession(session);
     }, 0);
   });
+
+  const confirmationParams = new URLSearchParams(window.location.search);
+  const confirmationTokenHash = confirmationParams.get("token_hash");
+  const confirmationType = confirmationParams.get("type");
+
+  if (confirmationTokenHash && confirmationType === "email") {
+    const verificationButton = $("#signin-submit");
+    verificationButton.disabled = true;
+    try {
+      const { error } = await supabase.auth.verifyOtp({
+        token_hash: confirmationTokenHash,
+        type: "email"
+      });
+      if (error) throw error;
+
+      // Remove the one-time token from the address bar immediately; keep the
+      // household invite token so it can be accepted after the verified session loads.
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete("token_hash");
+      cleanUrl.searchParams.delete("type");
+      cleanUrl.searchParams.delete("error");
+      cleanUrl.searchParams.delete("error_code");
+      cleanUrl.searchParams.delete("error_description");
+      window.history.replaceState({}, document.title, cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
+      showStatus(t("confirmationVerified"), "success");
+    } catch (error) {
+      showStatus(t("confirmationFailed") + " " + friendlyError(error), "error");
+    } finally {
+      verificationButton.disabled = false;
+    }
+  }
 
   const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
   if (sessionError) showStatus(friendlyError(sessionError), "error");
