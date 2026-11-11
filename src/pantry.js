@@ -119,11 +119,10 @@ export function mountPantry(config) {
 
   container.innerHTML = [
     '<div class="pantry-app">',
-    '<header class="pantry-topbar"><a class="brand pantry-brand" href="/" aria-label="FoodSaver home"><span class="brand-mark">🌿</span><span>FoodSaver</span></a>',
-    '<div class="pantry-top-actions"><span class="role-chip" id="pantry-role"></span><button class="quiet-button" type="button" data-action="refresh">' + escapeHtml(t("refresh")) + '</button><button class="quiet-button" type="button" data-action="signout">' + escapeHtml(t("signOut")) + '</button></div></header>',
     '<section class="pantry-heading"><div><p class="eyebrow">' + escapeHtml(household.name) + '</p><h1>' + escapeHtml(t("pantry")) + '</h1><p class="pantry-subtitle">' + escapeHtml(t("subtitle")) + '</p></div>',
+    '<div class="pantry-heading-actions"><span class="role-chip" id="pantry-role"></span><button class="quiet-button" type="button" data-action="refresh">' + escapeHtml(t("refresh")) + '</button><button class="quiet-button" type="button" data-action="signout">' + escapeHtml(t("signOut")) + '</button>',
     canManage ? '<button class="pantry-primary" type="button" data-action="new-item">＋ ' + escapeHtml(t("addFood")) + '</button>' : '',
-    '</section>',
+    '</div></section>',
     canManage ? '' : '<p class="permission-note">' + escapeHtml(t("permissionView")) + '</p>',
     '<div class="pantry-stat-grid" id="pantry-stats"></div>',
     '<section class="pantry-panel"><div class="pantry-toolbar"><input class="pantry-search" id="pantry-search" type="search" placeholder="' + escapeHtml(t("search")) + '" aria-label="' + escapeHtml(t("search")) + '" />',
@@ -291,8 +290,10 @@ export function mountPantry(config) {
   }
 
   function renderUnitOptions(baseUnit, selected) {
-    const allowed = UNIT_GROUPS[baseUnit] || ["unit"];
-    $("#food-unit").innerHTML = allowed.map(function(unit) { return '<option value="' + unit + '">' + escapeHtml(t(unit)) + '</option>'; }).join("");
+    const options = ["g","kg","ml","L","pcs","pack","unit"];
+    $("#food-unit").innerHTML = options.map(function(unit) {
+      return '<option value="' + unit + '">' + escapeHtml(t(unit)) + '</option>';
+    }).join("");
     $("#food-unit").value = selected;
     $("#food-unit").disabled = Boolean(editingItem);
   }
