@@ -302,3 +302,23 @@ button:disabled { opacity: .65; cursor: wait; }
   .analytics-metric { min-width:90px; padding:11px; }
   .members-dialog { padding:16px; }
 }
+
+/* Household consumption breakdown and month-based activity history. */
+.member-consumption-list { display:grid; gap:0; margin-top:14px; }
+.member-consumption-list h3 { margin:0 0 8px; color:var(--g800); font-size:14px; }
+.member-consumption-row {
+  display:grid; grid-template-columns:minmax(90px,1fr) minmax(80px,1fr) auto;
+  align-items:center; gap:10px; padding:10px 2px; border-top:1px solid #edf4e4;
+  color:var(--g700); font-size:12px;
+}
+.member-consumption-row strong { color:var(--g800); }
+.history-month-label { display:grid; gap:6px; max-width:220px; margin:12px 0 18px; color:var(--g700); font-size:12px; font-weight:700; }
+.history-panel[hidden] { display:none !important; }
+.history-panel .activity-list { margin-top:8px; }
+.history-panel .quiet-button { margin-top:14px; }
+.text-button { border:0; background:transparent; color:var(--g700); font:inherit; font-size:12px; font-weight:700; cursor:pointer; padding:8px 4px; }
+.text-button:hover { text-decoration:underline; }
+@media(max-width:480px) {
+  .member-consumption-row { grid-template-columns:minmax(70px,1fr) minmax(65px,1fr); }
+  .member-consumption-row .analytics-amount { grid-column:2; justify-self:start; }
+}
