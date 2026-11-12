@@ -236,7 +236,8 @@ export function mountPantry(config) {
     '<div class="location-tools"><details id="location-details"><summary>' + escapeHtml(t("addLocation")) + '</summary><form id="location-form" class="location-form">',
     '<input class="field-input" name="name" maxlength="60" required placeholder="' + escapeHtml(t("locationPlaceholder")) + '" aria-label="' + escapeHtml(t("locationName")) + '" />',
     '<button class="quiet-button" type="submit">' + escapeHtml(t("saveLocation")) + '</button></form><small>' + escapeHtml(t("locationHelp")) + '</small></details></div></section>',
-    '<section class="pantry-panel activity-panel"><div class="pantry-section-title"><h2>' + escapeHtml(t("activity")) + '</h2><span class="muted-count">Last 8</span></div><div id="pantry-activity" class="activity-list"><p class="empty-hint">' + escapeHtml(t("loading")) + '</p></div></section>',
+    '<section class="pantry-panel activity-panel"><div class="pantry-section-title"><h2>' + escapeHtml(t("activity")) + '</h2><button class="text-button" type="button" data-action="open-history">' + escapeHtml(t("viewAllActivity")) + '</button></div><div id="pantry-activity" class="activity-list"><p class="empty-hint">' + escapeHtml(t("loading")) + '</p></div></section>',
+    '<section class="pantry-panel history-panel" id="pantry-history-panel" hidden><div class="pantry-section-title"><h2>' + escapeHtml(t("activityHistory")) + '</h2><button class="text-button" type="button" data-action="close-history">' + escapeHtml(t("backToPantry")) + '</button></div><label class="history-month-label">' + escapeHtml(t("historyMonth")) + '<input class="field-input" id="history-month" type="month" value="' + historyMonth + '" /></label><div id="pantry-history-list" class="activity-list"></div><button class="quiet-button" type="button" id="history-load-more" data-action="load-more-history" hidden>' + escapeHtml(t("loadMore")) + '</button></section>',
     '<dialog id="stock-dialog" class="stock-dialog"><form method="dialog" class="dialog-close-row"><button class="icon-button" aria-label="' + escapeHtml(t("close")) + '">×</button></form>',
     '<form id="stock-form" class="stock-form"><h3>' + escapeHtml(t("restockTitle")) + '</h3><p id="stock-item-label" class="form-intro"></p>',
     '<label>' + escapeHtml(t("amountToAdd")) + '<div class="quantity-fields"><input class="field-input" name="quantity" id="stock-quantity" type="number" min="0.001" step="0.001" required /><span id="stock-unit" class="unit-label"></span></div></label>',
@@ -950,6 +951,13 @@ export function mountPantry(config) {
     if (action === "close-stock") $("#stock-dialog").close();
     if (action === "archive-item") await archiveItem(id);
     if (action === "undo-movement") await undoMovement(id);
+    if (action === "open-history") {
+      $("#pantry-history-panel").hidden = false;
+      try { await loadHistory(true); } catch (error) { console.warn(error); }
+      $("#pantry-history-panel").scrollIntoView({behavior:"smooth",block:"start"});
+    }
+    if (action === "close-history") $("#pantry-history-panel").hidden = true;
+    if (action === "load-more-history") { try { await loadHistory(false); } catch (error) { console.warn(error); } }
     if (action === "refresh") {
       // A full reload re-fetches the signed-in member's role and permission
       // flags in main.js, not only the pantry data in this module.
@@ -977,6 +985,10 @@ export function mountPantry(config) {
   $("#pantry-search").addEventListener("input",function(event) { searchTerm = event.target.value.trim(); renderItems(); },{signal:abortController.signal});
   $("#pantry-category-filter").addEventListener("change",function(event) { activeCategory = event.target.value; renderItems(); },{signal:abortController.signal});
   $("#pantry-location-filter").addEventListener("change",function(event) { activeLocation = event.target.value; renderItems(); },{signal:abortController.signal});
+  $("#history-month").addEventListener("change",async function(event) {
+    historyMonth = event.target.value || (function(){const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");})();
+    try { await loadHistory(true); } catch (error) { console.warn(error); }
+  },{signal:abortController.signal});
   $("#food-unit").addEventListener("change",function(event) {
     const unit = event.target.value;
     $("#quantity-help").textContent = "Stored accurately in " + (unit === "kg" ? "g" : unit === "L" ? "ml" : unit) + ".";
