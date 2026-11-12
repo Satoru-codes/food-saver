@@ -10,7 +10,7 @@ const EN = {
   notes:"Notes (optional)", saveItem:"Save item", cancel:"Cancel",
   addLocation:"Add storage location", locationName:"Location name", saveLocation:"Add location",
   edit:"Edit", archive:"Archive", restock:"Add stock", restockTitle:"Add stock",
-  amountToAdd:"Quantity to add", addStock:"Add stock", activity:"Recent inventory activity",
+  amountToAdd:"Quantity to add", addStock:"Add stock", activity:"Recent inventory activity", viewAllActivity:"View all activity", activityHistory:"Inventory activity history", backToPantry:"Back to pantry", historyMonth:"Month", loadMore:"Load older records", noHistory:"No activity found for this month.", historyError:"Could not load activity history.", consumptionByMember:"Consumption by member", sharedMember:"Shared household", noMemberConsumption:"No consumption recorded by household members this month.",
   noActivity:"No inventory activity yet.", added:"Added", adjustment:"Adjusted",
   consumption:"Consumed", waste:"Waste", reversal:"Undo", expired:"Expired",
   expiring:"Expiring soon", archived:"Item archived.", itemSaved:"Food item saved.",
@@ -77,7 +77,7 @@ const HI = {
   notes:"टिप्पणी (वैकल्पिक)", saveItem:"वस्तु सेव करें", cancel:"रद्द करें",
   addLocation:"भंडारण स्थान जोड़ें", locationName:"स्थान का नाम", saveLocation:"स्थान जोड़ें",
   edit:"बदलें", archive:"आर्काइव", restock:"स्टॉक जोड़ें", restockTitle:"स्टॉक जोड़ें",
-  amountToAdd:"जोड़ने की मात्रा", addStock:"स्टॉक जोड़ें", activity:"हाल की इन्वेंटरी गतिविधि",
+  amountToAdd:"जोड़ने की मात्रा", addStock:"स्टॉक जोड़ें", activity:"हाल की इन्वेंटरी गतिविधि", viewAllActivity:"सभी गतिविधियाँ देखें", activityHistory:"इन्वेंटरी गतिविधि इतिहास", backToPantry:"पैंट्री पर वापस जाएँ", historyMonth:"महीना", loadMore:"पुराने रिकॉर्ड लोड करें", noHistory:"इस महीने कोई गतिविधि नहीं मिली।", historyError:"गतिविधि इतिहास लोड नहीं हो सका।", consumptionByMember:"सदस्य के अनुसार इस्तेमाल", sharedMember:"परिवार का साझा इस्तेमाल", noMemberConsumption:"इस महीने परिवार के सदस्यों द्वारा कोई इस्तेमाल दर्ज नहीं हुआ।",
   noActivity:"अभी कोई इन्वेंटरी गतिविधि नहीं है।", added:"जोड़ा", adjustment:"बदला",
   consumption:"इस्तेमाल", waste:"बर्बादी", reversal:"Undo", expired:"समाप्त",
   expiring:"जल्द समाप्त होगा", archived:"वस्तु आर्काइव कर दी गई।",
@@ -177,6 +177,11 @@ export function mountPantry(config) {
   let members = [];
   let personalConsumption = [];
   let householdMovements = [];
+  let historyMovements = [];
+  let historyOffset = 0;
+  let historyHasMore = false;
+  let historyLoading = false;
+  let historyMonth = (function(){const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");})();
   let selectedManagedMemberId = null;
   let editingItem = null;
   let selectedStockItem = null;
@@ -390,36 +395,23 @@ export function mountPantry(config) {
   }
 
   function renderAnalytics() {
+    const reversed = new Set(householdMovements.filter(function(r){return r.movement_type==="reversal" && r.reversal_of_id;}).map(function(r){return r.reversal_of_id;}));
+    const effective = householdMovements.filter(function(r){return (r.movement_type==="consumption" || r.movement_type==="waste") && !reversed.has(r.id);});
+    personalConsumption = effective.filter(function(r){return r.movement_type==="consumption" && r.consumed_by_user_id===user.id;});
     const personalGroups = {};
-    personalConsumption.forEach(function(row) {
-      const unit = row.base_unit;
-      personalGroups[unit] = (personalGroups[unit] || 0) + Math.abs(Number(row.quantity_delta));
-    });
-    const personalTotal = Object.keys(personalGroups).map(function(unit) {
-      const amount = displayQuantity(personalGroups[unit], unit, unit, currentLanguage);
-      return '<span class="analytics-amount">' + escapeHtml(amount) + '</span>';
-    }).join("");
-    $("#personal-analytics-content").innerHTML = personalConsumption.length
-      ? '<div class="analytics-metrics"><div class="analytics-metric"><strong>' + personalConsumption.length + '</strong><span>' + escapeHtml(t("personalRecords")) + '</span></div><div class="analytics-units">' + (personalTotal || "") + '</div></div>'
-      : '<p class="empty-hint">' + escapeHtml(t("noPersonalData")) + '</p>';
-
-    if (canViewHouseholdAnalytics) {
-      const consumption = householdMovements.filter(function(row) { return row.movement_type === "consumption"; });
-      const waste = householdMovements.filter(function(row) { return row.movement_type === "waste"; });
-      const wasteGroups = {};
-      waste.forEach(function(row) {
-        const unit = row.base_unit;
-        wasteGroups[unit] = (wasteGroups[unit] || 0) + Math.abs(Number(row.quantity_delta));
-      });
-      const wasteAmounts = Object.keys(wasteGroups).map(function(unit) {
-        return '<span class="analytics-amount">' + escapeHtml(displayQuantity(wasteGroups[unit],unit,unit,currentLanguage)) + '</span>';
-      }).join("");
-      $("#household-analytics-content").innerHTML = householdMovements.length
-        ? '<div class="analytics-metrics"><div class="analytics-metric"><strong>' + consumption.length + '</strong><span>' + escapeHtml(t("householdConsumption")) + '</span></div><div class="analytics-metric"><strong>' + waste.length + '</strong><span>' + escapeHtml(t("householdWaste")) + '</span></div></div><div class="analytics-units">' + (wasteAmounts || "") + '</div>'
-        : '<p class="empty-hint">' + escapeHtml(t("noHouseholdData")) + '</p>';
-    }
+    personalConsumption.forEach(function(row){const unit=row.base_unit;personalGroups[unit]=(personalGroups[unit]||0)+Math.abs(Number(row.quantity_delta));});
+    const personalTotal = Object.keys(personalGroups).map(function(unit){return '<span class="analytics-amount">'+escapeHtml(displayQuantity(personalGroups[unit],unit,unit,currentLanguage))+'</span>';}).join("");
+    $("#personal-analytics-content").innerHTML = personalConsumption.length ? '<div class="analytics-metrics"><div class="analytics-metric"><strong>'+personalConsumption.length+'</strong><span>'+escapeHtml(t("personalRecords"))+'</span></div><div class="analytics-units">'+personalTotal+'</div></div>' : '<p class="empty-hint">'+escapeHtml(t("noPersonalData"))+'</p>';
+    if (!canViewHouseholdAnalytics) return;
+    const consumption=effective.filter(function(r){return r.movement_type==="consumption";});
+    const waste=effective.filter(function(r){return r.movement_type==="waste";});
+    const wasteGroups={}; waste.forEach(function(r){wasteGroups[r.base_unit]=(wasteGroups[r.base_unit]||0)+Math.abs(Number(r.quantity_delta));});
+    const wasteAmounts=Object.keys(wasteGroups).map(function(u){return '<span class="analytics-amount">'+escapeHtml(displayQuantity(wasteGroups[u],u,u,currentLanguage))+'</span>';}).join("");
+    const grouped={};
+    consumption.forEach(function(r){const who=r.consumed_by_user_id||"shared";const key=who+"|"+r.pantry_item_id+"|"+r.base_unit;if(!grouped[key])grouped[key]={who:who,item:r.pantry_items?.name||"Food item",unit:r.base_unit,qty:0};grouped[key].qty+=Math.abs(Number(r.quantity_delta));});
+    const rows=Object.values(grouped).sort(function(a,b){return a.who.localeCompare(b.who)||a.item.localeCompare(b.item);}).map(function(r){const p=householdPeople.find(function(x){return x.id===r.who;});const name=r.who==="shared"?t("sharedMember"):(p?.display_name||t("activityByMember"));return '<div class="member-consumption-row"><strong>'+escapeHtml(name)+'</strong><span>'+escapeHtml(r.item)+'</span><span class="analytics-amount">'+escapeHtml(displayQuantity(r.qty,r.unit,r.unit,currentLanguage))+'</span></div>';}).join("");
+    $("#household-analytics-content").innerHTML = '<div class="analytics-metrics"><div class="analytics-metric"><strong>'+consumption.length+'</strong><span>'+escapeHtml(t("householdConsumption"))+'</span></div><div class="analytics-metric"><strong>'+waste.length+'</strong><span>'+escapeHtml(t("householdWaste"))+'</span></div></div><div class="analytics-units">'+wasteAmounts+'</div><div class="member-consumption-list"><h3>'+escapeHtml(t("consumptionByMember"))+'</h3>'+(rows||'<p class="empty-hint">'+escapeHtml(t("noMemberConsumption"))+'</p>')+'</div>';
   }
-
   function manageableMembers() {
     return members.filter(function(member) {
       if (member.user_id === user.id || member.role === "owner") return false;
@@ -529,9 +521,9 @@ export function mountPantry(config) {
       supabase.from("food_categories").select("key,label_en,label_hi,sort_order").order("sort_order"),
       supabase.from("storage_locations").select("id,name,sort_order").eq("household_id",household.id).eq("is_active",true).order("sort_order"),
       supabase.from("pantry_items").select("id,household_id,name,category_key,storage_location_id,quantity_base,base_unit,display_unit,expiry_date,alert_days_before,notes,created_at,archived_at").eq("household_id",household.id).is("archived_at",null).order("name"),
-      supabase.from("inventory_movements").select("id,pantry_item_id,movement_type,quantity_delta,base_unit,actor_user_id,consumed_by_user_id,created_at").eq("household_id",household.id).order("created_at",{ascending:false}).limit(8),
+      supabase.from("inventory_movements").select("id,household_id,pantry_item_id,movement_type,quantity_delta,base_unit,actor_user_id,consumed_by_user_id,reversal_of_id,created_at,pantry_items!inventory_movements_pantry_item_id_household_id_fkey(name)").eq("household_id",household.id).order("created_at",{ascending:false}).limit(8),
       supabase.from("household_members").select("id,user_id,role,can_manage_inventory,can_log_own_consumption,can_log_others_consumption,can_record_waste,can_view_household_analytics,can_manage_members,joined_at").eq("household_id",household.id),
-      supabase.from("inventory_movements").select("id,pantry_item_id,quantity_delta,base_unit,created_at").eq("household_id",household.id).eq("movement_type","consumption").eq("consumed_by_user_id",user.id).gte("created_at",monthStart).order("created_at",{ascending:false}).limit(1000)
+      supabase.from("inventory_movements").select("id,household_id,pantry_item_id,movement_type,quantity_delta,base_unit,consumed_by_user_id,reversal_of_id,created_at,pantry_items!inventory_movements_pantry_item_id_household_id_fkey(name)").eq("household_id",household.id).gte("created_at",monthStart).in("movement_type",["consumption","waste","reversal"]).order("created_at",{ascending:false}).limit(5000)
     ];
     if (canViewHouseholdAnalytics) {
       baseQueries.push(
