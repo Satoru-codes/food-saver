@@ -370,28 +370,62 @@ export function mountPantry(config) {
     return t(names[type] || "adjustment");
   }
 
-  function renderActivity() {
-    if (!activities.length) {
-      $("#pantry-activity").innerHTML = '<p class="empty-hint">' + escapeHtml(t("noActivity")) + '</p>';
-      return;
-    }
-    $("#pantry-activity").innerHTML = activities.map(function(activity) {
+  function renderMovementRows(rows) {
+    if (!rows.length) return '<p class="empty-hint">' + escapeHtml(t("noActivity")) + '</p>';
+    return rows.map(function(activity) {
       const item = items.find(function(entry) { return entry.id === activity.pantry_item_id; });
-      const amount = displayQuantity(Math.abs(Number(activity.quantity_delta)), activity.base_unit, activity.base_unit, currentLanguage);
+      const itemName = activity.pantry_items?.name || (item ? item.name : "Food item");
+      const amount = displayQuantity(Math.abs(Number(activity.quantity_delta)),activity.base_unit,activity.base_unit,currentLanguage);
       const actorProfile = householdPeople.find(function(person) { return person.id === activity.actor_user_id; });
       const consumerProfile = householdPeople.find(function(person) { return person.id === activity.consumed_by_user_id; });
       const actor = activity.actor_user_id === user.id ? t("activityByYou") : (actorProfile?.display_name || t("activityByMember"));
-      const consumedBy = activity.movement_type === "consumption" && activity.consumed_by_user_id
-        ? " · " + (consumerProfile?.display_name || t("activityByMember"))
-        : "";
-      const date = new Date(activity.created_at).toLocaleString(currentLanguage === "hi" ? "hi-IN" : "en-IN", {day:"numeric",month:"short",hour:"numeric",minute:"2-digit"});
+      const consumedBy = activity.movement_type === "consumption" && activity.consumed_by_user_id ? " · " + (consumerProfile?.display_name || t("activityByMember")) : "";
+      const date = new Date(activity.created_at).toLocaleString(currentLanguage === "hi" ? "hi-IN" : "en-IN",{day:"numeric",month:"short",hour:"numeric",minute:"2-digit"});
       const canUndo = activity.movement_type !== "reversal" && (activity.actor_user_id === user.id || canManage);
-      return '<div class="activity-row"><div class="activity-dot ' + escapeHtml(activity.movement_type) + '"></div><div class="activity-content"><strong>' +
-        escapeHtml(item ? item.name : "Food item") + '</strong><span>' + escapeHtml(movementLabel(activity.movement_type)) + ' · ' +
-        escapeHtml(amount) + ' · ' + escapeHtml(actor + consumedBy) + '</span><small>' + escapeHtml(date) + '</small></div>' +
-        (canUndo ? '<button type="button" class="mini-button" data-action="undo-movement" data-id="' + escapeHtml(activity.id) + '">' + escapeHtml(t("reversal")) + '</button>' : '') +
-        '</div>';
+      return '<div class="activity-row"><div class="activity-dot ' + escapeHtml(activity.movement_type) + '"></div><div class="activity-content"><strong>' + escapeHtml(itemName) + '</strong><span>' + escapeHtml(movementLabel(activity.movement_type)) + ' · ' + escapeHtml(amount) + ' · ' + escapeHtml(actor + consumedBy) + '</span><small>' + escapeHtml(date) + '</small></div>' + (canUndo ? '<button type="button" class="mini-button" data-action="undo-movement" data-id="' + escapeHtml(activity.id) + '">' + escapeHtml(t("reversal")) + '</button>' : '') + '</div>';
     }).join("");
+  }
+
+  function renderActivity() {
+    $("#pantry-activity").innerHTML = renderMovementRows(activities);
+  }
+
+  function renderHistory() {
+    $("#pantry-history-list").innerHTML = historyMovements.length ? renderMovementRows(historyMovements) : '<p class="empty-hint">' + escapeHtml(t("noHistory")) + '</p>';
+    $("#history-load-more").hidden = !historyHasMore;
+    $("#history-load-more").disabled = historyLoading;
+  }
+
+  async function loadHistory(reset) {
+    if (historyLoading) return;
+    historyLoading = true;
+    if (reset) {
+      historyOffset = 0;
+      historyMovements = [];
+      historyHasMore = false;
+      $("#pantry-history-list").innerHTML = '<p class="loading-note">' + escapeHtml(t("loading")) + '</p>';
+    }
+    $("#history-load-more").disabled = true;
+    try {
+      const parts = historyMonth.split("-").map(Number);
+      const start = new Date(parts[0],parts[1]-1,1).toISOString();
+      const end = new Date(parts[0],parts[1],1).toISOString();
+      const result = await supabase.from("inventory_movements")
+        .select("id,household_id,pantry_item_id,movement_type,quantity_delta,base_unit,actor_user_id,consumed_by_user_id,reversal_of_id,created_at,pantry_items!inventory_movements_pantry_item_id_household_id_fkey(name)")
+        .eq("household_id",household.id).gte("created_at",start).lt("created_at",end)
+        .order("created_at",{ascending:false}).range(historyOffset,historyOffset+24);
+      if (result.error) throw result.error;
+      const batch = result.data || [];
+      historyMovements = reset ? batch : historyMovements.concat(batch);
+      historyOffset += batch.length;
+      historyHasMore = batch.length === 25;
+    } catch (error) {
+      $("#pantry-history-list").innerHTML = '<p class="inline-message error">' + escapeHtml(t("historyError")) + '</p>';
+      throw error;
+    } finally {
+      historyLoading = false;
+      renderHistory();
+    }
   }
 
   function renderAnalytics() {
