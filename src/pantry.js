@@ -525,11 +525,6 @@ export function mountPantry(config) {
       supabase.from("household_members").select("id,user_id,role,can_manage_inventory,can_log_own_consumption,can_log_others_consumption,can_record_waste,can_view_household_analytics,can_manage_members,joined_at").eq("household_id",household.id),
       supabase.from("inventory_movements").select("id,household_id,pantry_item_id,movement_type,quantity_delta,base_unit,consumed_by_user_id,reversal_of_id,created_at,pantry_items!inventory_movements_pantry_item_id_household_id_fkey(name)").eq("household_id",household.id).gte("created_at",monthStart).in("movement_type",["consumption","waste","reversal"]).order("created_at",{ascending:false}).limit(5000)
     ];
-    if (canViewHouseholdAnalytics) {
-      baseQueries.push(
-        supabase.from("inventory_movements").select("id,movement_type,quantity_delta,base_unit,created_at").eq("household_id",household.id).gte("created_at",monthStart).in("movement_type",["consumption","waste"]).limit(2000)
-      );
-    }
     const results = await Promise.all(baseQueries);
     const error = results.map(function(result) { return result.error; }).find(Boolean);
     if (error) throw error;
@@ -538,8 +533,8 @@ export function mountPantry(config) {
     items = results[2].data || [];
     activities = results[3].data || [];
     members = results[4].data || [];
-    personalConsumption = results[5].data || [];
-    householdMovements = canViewHouseholdAnalytics ? (results[6].data || []) : [];
+    householdMovements = results[5].data || [];
+    personalConsumption = householdMovements.filter(function(row) { return row.movement_type === "consumption" && row.consumed_by_user_id === user.id; });
 
     const memberIds = members.map(function(member) { return member.user_id; });
     if (memberIds.length) {
