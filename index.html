@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="theme-color" content="#3b6d11" />
+    <meta name="description" content="FoodSaver helps households manage food, track consumption and reduce waste." />
+    <title>FoodSaver — Your household pantry</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <main id="app" class="page-shell">
+      <header class="brand-header">
+        <a class="brand" href="/" aria-label="FoodSaver home">
+          <span class="brand-mark" aria-hidden="true">🌿</span>
+          <span>FoodSaver</span>
+        </a>
+        <label class="language-control">
+          <span class="sr-only">Language</span>
+          <select id="language-select" aria-label="Choose language">
+            <option value="en">English</option>
+            <option value="hi">हिन्दी</option>
+          </select>
+        </label>
+      </header>
+
+      <section class="hero" id="auth-hero">
+        <div class="hero-copy">
+          <p class="eyebrow" data-i18n="eyebrow">A smarter way to manage food at home</p>
+          <h1 data-i18n="headline">A little more mindful.<br />A lot less waste.</h1>
+          <p class="hero-description" data-i18n="intro">Keep your household pantry organised, understand what gets used, and make less food go to waste.</p>
+          <div class="trust-points">
+            <span><span aria-hidden="true">✓</span> <span data-i18n="point1">One shared household pantry</span></span>
+            <span><span aria-hidden="true">✓</span> <span data-i18n="point2">Track consumption and food waste</span></span>
+            <span><span aria-hidden="true">✓</span> <span data-i18n="point3">English and Hindi</span></span>
+          </div>
+        </div>
+
+        <section class="auth-card" id="auth-card" aria-labelledby="auth-title">
+          <div class="auth-tabs" role="tablist" aria-label="Account access">
+            <button class="tab-button active" id="tab-signin" type="button" role="tab" aria-selected="true" data-i18n="signinTab">Sign in</button>
+            <button class="tab-button" id="tab-signup" type="button" role="tab" aria-selected="false" data-i18n="signupTab">Create account</button>
+          </div>
+
+          <div id="status-message" class="status-message" role="status" aria-live="polite" hidden></div>
+
+          <section id="signin-panel" class="form-panel">
+            <h2 id="auth-title" data-i18n="welcomeBack">Welcome back</h2>
+            <p class="form-intro" data-i18n="signinIntro">Sign in to continue to your household pantry.</p>
+            <form id="signin-form">
+              <label class="field-label" for="signin-email" data-i18n="emailLabel">Email address</label>
+              <input class="field-input" id="signin-email" name="email" type="email" autocomplete="email" required placeholder="you@example.com" />
+              <label class="field-label" for="signin-password" data-i18n="passwordLabel">Password</label>
+              <input class="field-input" id="signin-password" name="password" type="password" autocomplete="current-password" required minlength="8" placeholder="Enter your password" />
+              <button class="primary-button" id="signin-submit" type="submit" data-i18n="signinButton">Sign in</button>
+            </form>
+            <button class="text-button" id="resend-confirmation" type="button" data-i18n="resendConfirmation" hidden>Resend confirmation email</button>
+            <button class="text-button" id="show-reset" type="button" data-i18n="forgotPassword">Forgot your password?</button>
+          </section>
+
+          <section id="signup-panel" class="form-panel" hidden>
+            <h2 data-i18n="createAccountTitle">Create your account</h2>
+            <p class="form-intro" data-i18n="signupIntro">Start by creating your personal FoodSaver account.</p>
+            <form id="signup-form">
+              <label class="field-label" for="signup-name" data-i18n="nameLabel">Your name</label>
+              <input class="field-input" id="signup-name" name="name" type="text" autocomplete="name" required maxlength="80" placeholder="Your name" />
+              <label class="field-label" for="signup-email" data-i18n="emailLabel">Email address</label>
+              <input class="field-input" id="signup-email" name="email" type="email" autocomplete="email" required placeholder="you@example.com" />
+              <label class="field-label" for="signup-password" data-i18n="passwordLabel">Password</label>
+              <input class="field-input" id="signup-password" name="password" type="password" autocomplete="new-password" required minlength="8" placeholder="At least 8 characters" />
+              <button class="primary-button" id="signup-submit" type="submit" data-i18n="createAccountButton">Create account</button>
+            </form>
+            <p class="fine-print" data-i18n="emailConfirmNote">We'll send a confirmation link to your email address.</p>
+          </section>
+
+          <section id="reset-panel" class="form-panel" hidden>
+            <h2 data-i18n="resetTitle">Reset your password</h2>
+            <p class="form-intro" data-i18n="resetIntro">Enter your email and we'll send you a password reset link.</p>
+            <form id="reset-form">
+              <label class="field-label" for="reset-email" data-i18n="emailLabel">Email address</label>
+              <input class="field-input" id="reset-email" name="email" type="email" autocomplete="email" required placeholder="you@example.com" />
+              <button class="primary-button" id="reset-submit" type="submit" data-i18n="sendResetLink">Send reset link</button>
+            </form>
+            <button class="text-button" id="back-to-signin" type="button" data-i18n="backToSignIn">Back to sign in</button>
+          </section>
+
+          <section id="confirm-email-panel" class="form-panel" hidden>
+            <h2 data-i18n="confirmEmailTitle">Confirm your email address</h2>
+            <p class="form-intro" data-i18n="confirmEmailIntro">Tap the button below to finish verifying your email address.</p>
+            <button class="primary-button" id="confirm-email-submit" type="button" data-i18n="confirmEmailButton">Confirm email address</button>
+            <button class="text-button" id="confirmation-back-to-signin" type="button" data-i18n="backToSignIn">Back to sign in</button>
+          </section>
+
+          <section id="new-password-panel" class="form-panel" hidden>
+            <h2 data-i18n="newPasswordTitle">Choose a new password</h2>
+            <form id="new-password-form">
+              <label class="field-label" for="new-password" data-i18n="newPasswordLabel">New password</label>
+              <input class="field-input" id="new-password" name="password" type="password" autocomplete="new-password" required minlength="8" />
+              <button class="primary-button" id="new-password-submit" type="submit" data-i18n="updatePassword">Update password</button>
+            </form>
+          </section>
+        </section>
+
+        <section class="auth-card household-card" id="household-card" hidden>
+          <div class="household-icon" aria-hidden="true">🏡</div>
+          <p class="eyebrow" data-i18n="signedIn">You're signed in</p>
+          <h2 data-i18n="householdTitle">Create your household</h2>
+          <p class="form-intro" data-i18n="householdIntro">Give your shared pantry a name. You can invite family members after setup.</p>
+          <div id="household-status-message" class="status-message" role="status" aria-live="polite" hidden></div>
+          <form id="household-form">
+            <label class="field-label" for="household-name" data-i18n="householdNameLabel">Household name</label>
+            <input class="field-input" id="household-name" name="name" type="text" maxlength="80" required placeholder="e.g. Sharma Family" />
+            <button class="primary-button" id="household-submit" type="submit" data-i18n="createHousehold">Create household</button>
+          </form>
+          <button class="text-button" id="household-signout" type="button" data-i18n="signOut">Sign out</button>
+        </section>
+
+        <section class="auth-card household-card" id="workspace-card" hidden>
+          <div class="household-icon" aria-hidden="true">🌿</div>
+          <p class="eyebrow" data-i18n="workspaceReady">Account connected</p>
+          <h2 id="workspace-household-name">Your household</h2>
+          <p class="form-intro" id="workspace-role"></p>
+          <div class="next-step-note">
+            <strong data-i18n="setupConnectedTitle">Authentication and household setup are connected.</strong>
+            <p data-i18n="setupConnectedBody">The next development step is connecting pantry items to the shared database. Your existing browser-only pantry has not been imported.</p>
+          </div>
+          <button class="primary-button secondary-button" id="workspace-signout" type="button" data-i18n="signOut">Sign out</button>
+        </section>
+      </section>
+
+      <section id="workspace-view" class="workspace-view" hidden>
+        <div id="pantry-root"></div>
+      </section>
+
+      <footer class="page-footer">
+        <span data-i18n="footer">FoodSaver · Less waste, more thoughtful kitchens.</span>
+        <span id="connection-indicator" class="connection-indicator">Checking connection…</span>
+      </footer>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
